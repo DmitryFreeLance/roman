@@ -45,6 +45,7 @@ type Profile = {
   lastName?: string;
   displayName?: string;
   phone?: string;
+  selectedGroupId?: number;
   registered: boolean;
   sellerBlocked: boolean;
   commissionDebtKopecks: number;
@@ -60,6 +61,25 @@ type Club = {
   shopThreadId: number;
   commissionPercent: number;
   productCount: number;
+};
+
+type AdminGroup = Club & {
+  active: boolean;
+  stores: number;
+  completedOrders: number;
+};
+
+type GlobalSettings = {
+  botCommissionPercent: number;
+  debtLimitKopecks: number;
+};
+
+type Buyer = {
+  telegramId: number;
+  username?: string;
+  name: string;
+  phone?: string;
+  status: string;
 };
 
 type Category = {
@@ -79,6 +99,7 @@ type Product = {
   buyerPriceKopecks: number;
   images: string[];
   storeName: string;
+  sellerTelegramId: number;
   rating: number;
   reviewCount: number;
   groupBuyId?: number;
@@ -138,6 +159,9 @@ const camelProfile = (row: Record<string, unknown>): Profile => ({
   lastName: row.last_name ? String(row.last_name) : undefined,
   displayName: row.display_name ? String(row.display_name) : undefined,
   phone: row.phone ? String(row.phone) : undefined,
+  selectedGroupId: row.selected_group_id
+    ? asNumber(row.selected_group_id)
+    : undefined,
   registered: asBoolean(row.registered),
   sellerBlocked: asBoolean(row.seller_blocked),
   commissionDebtKopecks: asNumber(row.commission_debt_kopecks),
@@ -161,6 +185,23 @@ const camelCategory = (row: Record<string, unknown>): Category => ({
   sortOrder: asNumber(row.sort_order),
 });
 
+const camelAdminGroup = (row: Record<string, unknown>): AdminGroup => ({
+  ...camelClub(row),
+  active: asBoolean(row.active),
+  stores: asNumber(row.stores),
+  completedOrders: asNumber(row.completed_orders),
+});
+
+const camelBuyer = (row: Record<string, unknown>): Buyer => ({
+  telegramId: asNumber(row.telegram_id),
+  username: row.username ? String(row.username) : undefined,
+  name:
+    [row.first_name, row.last_name].filter(Boolean).join(" ") ||
+    `ID ${asNumber(row.telegram_id)}`,
+  phone: row.contact_phone ? String(row.contact_phone) : undefined,
+  status: String(row.status || "RESERVED"),
+});
+
 const camelProduct = (row: Record<string, unknown>): Product => {
   let images: string[] = [];
   try {
@@ -179,6 +220,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     buyerPriceKopecks: asNumber(row.buyer_price_kopecks),
     images,
     storeName: String(row.store_name || ""),
+    sellerTelegramId: asNumber(row.seller_telegram_id),
     rating: asNumber(row.rating),
     reviewCount: asNumber(row.review_count),
     groupBuyId: row.group_buy_id ? asNumber(row.group_buy_id) : undefined,
@@ -189,6 +231,20 @@ const camelProduct = (row: Record<string, unknown>): Product => {
       : undefined,
   };
 };
+
+function dismissKeyboard(event: React.PointerEvent<HTMLElement>) {
+  const target = event.target;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  ) {
+    return;
+  }
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) active.blur();
+}
 
 export function RedlineApp() {
   const [initData, setInitData] = useState("");
@@ -277,16 +333,14 @@ export function RedlineApp() {
     setLoading(true);
     setError("");
     try {
-      const profileRow = await request<Record<string, unknown>>("/me", {}, data);
-      const nextProfile = camelProfile(profileRow);
-      setProfile(nextProfile);
-      if (!nextProfile.registered) return;
-
-      const [groupRows, categoryRows] = await Promise.all([
+      const [profileRow, groupRows, categoryRows] = await Promise.all([
+        request<Record<string, unknown>>("/me", {}, data),
         request<Record<string, unknown>[]>("/groups", {}, data),
         request<Record<string, unknown>[]>("/categories", {}, data),
       ]);
+      const nextProfile = camelProfile(profileRow);
       const nextClubs = groupRows.map(camelClub);
+      setProfile(nextProfile);
       setClubs(nextClubs);
       setCategories(categoryRows.map(camelCategory));
 
@@ -296,11 +350,14 @@ export function RedlineApp() {
       const requested = nextClubs.find(
         (club) => club.telegramGroupId === requestedGroup,
       );
+      const preferred = nextClubs.find(
+        (club) => club.id === nextProfile.selectedGroupId,
+      );
       setSelectedClub((current) => {
         if (current) {
           return nextClubs.find((club) => club.id === current.id) || null;
         }
-        return requested || (nextClubs.length === 1 ? nextClubs[0] : null);
+        return requested || preferred || null;
       });
     } catch (loadError) {
       setError(
@@ -456,12 +513,28 @@ export function RedlineApp() {
     return (
       <Registration
         profile={profile}
-        onRegister={async (name, phone) => {
+        clubs={clubs}
+        onRegister={async (name, phone, groupId) => {
           await request("/register", {
             method: "POST",
-            body: JSON.stringify({ displayName: name, phone }),
+            body: JSON.stringify({ displayName: name, phone, groupId }),
           });
           await loadBootstrap();
+        }}
+      />
+    );
+  }
+
+  if (profile?.registered && clubs.length > 0 && !selectedClub) {
+    return (
+      <ClubChoice
+        clubs={clubs}
+        onChoose={async (club) => {
+          await request(`/me/group/${club.id}`, { method: "PUT" });
+          setProfile((current) =>
+            current ? { ...current, selectedGroupId: club.id } : current,
+          );
+          setSelectedClub(club);
         }}
       />
     );
@@ -478,7 +551,7 @@ export function RedlineApp() {
   ];
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" onPointerDown={dismissKeyboard}>
       <div className="noise" />
       <header className="topbar">
         <button className="icon-button menu-button" onClick={() => setDrawerOpen(true)} aria-label="Открыть меню">
@@ -491,15 +564,28 @@ export function RedlineApp() {
             <small>КЛУБ</small>
             <select
               value={selectedClub?.id || ""}
-              onChange={(event) => {
+              onChange={async (event) => {
                 const nextClub =
                   clubs.find((club) => club.id === Number(event.target.value)) ||
                   null;
-                if (!nextClub) setProducts([]);
-                setSelectedClub(nextClub);
+                if (!nextClub) return;
+                try {
+                  await request(`/me/group/${nextClub.id}`, { method: "PUT" });
+                  setProfile((current) =>
+                    current
+                      ? { ...current, selectedGroupId: nextClub.id }
+                      : current,
+                  );
+                  setSelectedClub(nextClub);
+                } catch (selectionError) {
+                  setToast(
+                    selectionError instanceof Error
+                      ? selectionError.message
+                      : "Не удалось выбрать клуб",
+                  );
+                }
               }}
             >
-              <option value="">Клуб не выбран</option>
               {clubs.map((club) => (
                 <option key={club.id} value={club.id}>{club.title}</option>
               ))}
@@ -621,13 +707,21 @@ export function RedlineApp() {
         )}
 
         {screen === "admin" && selectedClub && (
-          <ClubAdmin club={selectedClub} products={products} />
+          <ClubAdmin
+            club={selectedClub}
+            products={products}
+            request={request}
+            onChanged={async () => {
+              await loadBootstrap();
+              await loadCatalog(selectedClub.telegramGroupId);
+            }}
+            onToast={setToast}
+          />
         )}
 
         {screen === "superadmin" && profile?.superAdmin && (
           <SuperAdmin
             categories={categories}
-            clubs={clubs}
             request={request}
             onCategoriesChanged={reloadCategories}
             onToast={setToast}
@@ -661,19 +755,22 @@ export function RedlineApp() {
 
 function Registration({
   profile,
+  clubs,
   onRegister,
 }: {
   profile: Profile;
-  onRegister: (name: string, phone: string) => Promise<void>;
+  clubs: Club[];
+  onRegister: (name: string, phone: string, groupId: number | null) => Promise<void>;
 }) {
   const suggestedName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const [name, setName] = useState(suggestedName);
   const [phone, setPhone] = useState("");
+  const [groupId, setGroupId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   return (
-    <main className="registration-shell">
+    <main className="registration-shell" onPointerDown={dismissKeyboard}>
       <div className="registration-card">
         <div className="brand-lockup"><span className="brand-slash" /><div><b>REDLINE</b><small>CLUB MARKET</small></div></div>
         <span className="section-kicker">ПЕРВЫЙ ВХОД</span>
@@ -685,7 +782,7 @@ function Registration({
             setSaving(true);
             setError("");
             try {
-              await onRegister(name, phone);
+              await onRegister(name, phone, groupId ? Number(groupId) : null);
             } catch (registrationError) {
               setError(
                 registrationError instanceof Error
@@ -697,11 +794,102 @@ function Registration({
             }
           }}
         >
-          <label><span>Как к вам обращаться</span><input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} /></label>
-          <label><span>Телефон</span><input value={phone} onChange={(event) => setPhone(event.target.value)} required placeholder="+7 900 000-00-00" /></label>
+          <label>
+            <span>Как к вам обращаться</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+              minLength={2}
+              enterKeyHint="next"
+            />
+          </label>
+          <label>
+            <span>Телефон</span>
+            <input
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              required
+              inputMode="tel"
+              enterKeyHint="next"
+              placeholder="+7 900 000-00-00"
+            />
+          </label>
+          {clubs.length > 0 && (
+            <label>
+              <span>Ваш клуб</span>
+              <select
+                value={groupId}
+                onChange={(event) => setGroupId(event.target.value)}
+                required
+              >
+                <option value="" disabled>Выберите клуб из списка</option>
+                {clubs.map((club) => (
+                  <option key={club.id} value={club.id}>{club.title}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="checkbox-label"><input type="checkbox" required /><span>Согласен с правилами прямых расчётов между участниками</span></label>
           {error && <p className="form-error">{error}</p>}
           <button className="main-action" type="submit" disabled={saving}>{saving ? "Сохраняем…" : "Зарегистрироваться"}</button>
+        </form>
+      </div>
+    </main>
+  );
+}
+
+function ClubChoice({
+  clubs,
+  onChoose,
+}: {
+  clubs: Club[];
+  onChoose: (club: Club) => Promise<void>;
+}) {
+  const [groupId, setGroupId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  return (
+    <main className="registration-shell" onPointerDown={dismissKeyboard}>
+      <div className="registration-card club-choice-card">
+        <div className="brand-lockup"><span className="brand-slash" /><div><b>REDLINE</b><small>CLUB MARKET</small></div></div>
+        <span className="section-kicker">ПЕРВЫЙ ВХОД</span>
+        <h1>Выберите клуб</h1>
+        <p>Каталог, объявления и настройки будут открыты для выбранной Telegram-группы.</p>
+        <form
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const club = clubs.find((item) => item.id === Number(groupId));
+            if (!club) return;
+            setSaving(true);
+            setError("");
+            try {
+              await onChoose(club);
+            } catch (selectionError) {
+              setError(
+                selectionError instanceof Error
+                  ? selectionError.message
+                  : "Не удалось выбрать клуб",
+              );
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          <label>
+            <span>Доступные клубы</span>
+            <select value={groupId} onChange={(event) => setGroupId(event.target.value)} required>
+              <option value="" disabled>Выберите клуб из списка</option>
+              {clubs.map((club) => (
+                <option key={club.id} value={club.id}>{club.title}</option>
+              ))}
+            </select>
+          </label>
+          {error && <p className="form-error">{error}</p>}
+          <button className="main-action" disabled={saving || !groupId}>
+            {saving ? "Сохраняем…" : "Войти в клуб"}
+          </button>
         </form>
       </div>
     </main>
@@ -1041,7 +1229,7 @@ function CreateListing({
       <form className="listing-form" onSubmit={submit}>
         <label className={`upload-area ${previews.length ? "has-preview" : ""}`}>
           {previews.length ? (
-            <div className="upload-preview-grid">
+            <div className={`upload-preview-grid ${previews.length === 1 ? "single-photo" : ""}`}>
               {previews.map((preview, index) => (
                 // Blob previews exist only in the browser and cannot use next/image.
                 // eslint-disable-next-line @next/next/no-img-element
@@ -1093,50 +1281,406 @@ function CreateListing({
   );
 }
 
-function ClubAdmin({ club, products }: { club: Club; products: Product[] }) {
+function ClubAdmin({
+  club,
+  products,
+  request,
+  onChanged,
+  onToast,
+}: {
+  club: Club;
+  products: Product[];
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onChanged: () => Promise<void>;
+  onToast: (message: string) => void;
+}) {
   const groupBuys = products.filter((product) => product.kind === "group");
+  const [commission, setCommission] = useState(String(club.commissionPercent));
+  const [savingCommission, setSavingCommission] = useState(false);
+  const [stats, setStats] = useState({
+    products: products.length,
+    sellers: 0,
+    completedOrders: 0,
+    groupCommissionKopecks: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void request<Record<string, unknown>>(
+      `/groups/${club.telegramGroupId}/admin/stats`,
+    )
+      .then((row) => {
+        if (!cancelled) {
+          setStats({
+            products: asNumber(row.products),
+            sellers: asNumber(row.sellers),
+            completedOrders: asNumber(row.completed_orders),
+            groupCommissionKopecks: asNumber(row.group_commission_kopecks),
+          });
+        }
+      })
+      .catch((statsError) => {
+        if (!cancelled) {
+          onToast(
+            statsError instanceof Error
+              ? statsError.message
+              : "Не удалось получить статистику клуба",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Statistics reload when the selected Telegram group changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [club.telegramGroupId]);
+
   return (
     <section className="inner-page admin-page">
       <div className="page-title"><span className="section-kicker">GROUP OWNER</span><h1>Админка клуба</h1><p>{club.title}</p></div>
       <div className="admin-metrics">
-        <div><span>Товаров</span><b>{products.length}</b><small>Реальные объявления</small></div>
-        <div><span>Групповых закупок</span><b>{groupBuys.length}</b><small>По текущему каталогу</small></div>
-        <div><span>Комиссия группы</span><b>{club.commissionPercent}%</b><small>ID темы: {club.shopThreadId}</small></div>
+        <div><span>Товаров / продавцов</span><b>{stats.products} / {stats.sellers}</b><small>Активные записи</small></div>
+        <div><span>Завершено продаж</span><b>{stats.completedOrders}</b><small>Фактические сделки</small></div>
+        <div><span>Начислено группе</span><b>{formatPrice(stats.groupCommissionKopecks)}</b><small>Комиссия {club.commissionPercent}%</small></div>
+      </div>
+      <form
+        className="settings-card admin-settings-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSavingCommission(true);
+          try {
+            await request(`/groups/${club.telegramGroupId}/commission`, {
+              method: "PUT",
+              body: JSON.stringify({ commissionPercent: Number(commission) }),
+            });
+            await onChanged();
+            onToast("Комиссия клуба сохранена");
+          } catch (commissionError) {
+            onToast(
+              commissionError instanceof Error
+                ? commissionError.message
+                : "Не удалось сохранить комиссию",
+            );
+          } finally {
+            setSavingCommission(false);
+          }
+        }}
+      >
+        <div>
+          <h2>Настройки клуба</h2>
+          <p className="settings-hint">Комиссия клуба прибавляется к цене покупателя. Менять её может владелец группы.</p>
+        </div>
+        <label>
+          <span>Комиссия группы, %</span>
+          <input
+            value={commission}
+            onChange={(event) => setCommission(event.target.value)}
+            inputMode="decimal"
+            type="number"
+            min="0"
+            max="30"
+            step="0.1"
+            required
+          />
+        </label>
+        <button className="main-action" disabled={savingCommission}>
+          {savingCommission ? "Сохраняем…" : "Сохранить комиссию"}
+        </button>
+      </form>
+      <div className="subsection-heading">
+        <h2>Групповые закупки</h2>
+        <p>Фиксация цены, подтверждение оплаты, контакты и сроки поставки.</p>
       </div>
       {groupBuys.length ? (
-        <div className="admin-table-card">
+        <div className="procurement-list">
           {groupBuys.map((product) => (
-            <div className="group-admin-row" key={product.id}>
-              <span className="shop-avatar">{product.title.slice(0, 2).toUpperCase()}</span>
-              <p><b>{product.title}</b><small>{product.reservedCount} из {product.targetCount || 0} участников</small></p>
-              <strong>{formatPrice(product.buyerPriceKopecks)}</strong>
-              <em>{product.groupBuyStatus || "COLLECTING"}</em>
-            </div>
+            <GroupBuyAdminCard
+              key={product.id}
+              product={product}
+              request={request}
+              onChanged={onChanged}
+              onToast={onToast}
+            />
           ))}
         </div>
       ) : (
         <div className="empty-state"><UsersRound size={30} /><h3>Закупок пока нет</h3><p>Данные появятся после публикации группового товара.</p></div>
       )}
+      <div className="subsection-heading">
+        <h2>Модерация объявлений</h2>
+        <p>Скрывайте отдельные карточки или блокируйте продавца внутри этой группы.</p>
+      </div>
+      {products.length ? (
+        <div className="admin-table-card">
+          {products.map((product) => (
+            <div className="moderation-row" key={product.id}>
+              <span className="shop-avatar">{product.title.slice(0, 2).toUpperCase()}</span>
+              <p><b>{product.title}</b><small>{product.storeName} · Telegram ID продавца: {product.sellerTelegramId}</small></p>
+              <button
+                onClick={async () => {
+                  try {
+                    await request(
+                      `/groups/${club.telegramGroupId}/products/${product.id}`,
+                      { method: "DELETE" },
+                    );
+                    await onChanged();
+                    onToast("Объявление скрыто");
+                  } catch (moderationError) {
+                    onToast(moderationError instanceof Error ? moderationError.message : "Не удалось скрыть объявление");
+                  }
+                }}
+              >
+                Скрыть
+              </button>
+              <button
+                className="ban-action"
+                onClick={async () => {
+                  try {
+                    await request(
+                      `/groups/${club.telegramGroupId}/sellers/${product.sellerTelegramId}/ban`,
+                      {
+                        method: "PUT",
+                        body: JSON.stringify({ banned: true }),
+                      },
+                    );
+                    await onChanged();
+                    onToast("Продавец заблокирован в группе");
+                  } catch (banError) {
+                    onToast(banError instanceof Error ? banError.message : "Не удалось заблокировать продавца");
+                  }
+                }}
+              >
+                Заблокировать
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-inline">Активных объявлений нет.</div>
+      )}
     </section>
+  );
+}
+
+function GroupBuyAdminCard({
+  product,
+  request,
+  onChanged,
+  onToast,
+}: {
+  product: Product;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onChanged: () => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const [buyers, setBuyers] = useState<Buyer[]>([]);
+  const [buyersOpen, setBuyersOpen] = useState(false);
+  const [actionSaving, setActionSaving] = useState(false);
+  const status = product.groupBuyStatus || "COLLECTING";
+  const statusLabel: Record<string, string> = {
+    COLLECTING: "Идёт набор",
+    PRICE_CONFIRMATION: "Нужно обновить цену",
+    AWAITING_PAYMENT: "Ожидается оплата",
+    FORMED: "Закупка сформирована",
+    IN_DELIVERY: "Ожидается поставка",
+    COMPLETED: "Завершена",
+    CANCELLED: "Отменена",
+  };
+
+  async function runAction(action: () => Promise<void>, success: string) {
+    setActionSaving(true);
+    try {
+      await action();
+      await onChanged();
+      onToast(success);
+    } catch (actionError) {
+      onToast(
+        actionError instanceof Error
+          ? actionError.message
+          : "Не удалось выполнить действие",
+      );
+    } finally {
+      setActionSaving(false);
+    }
+  }
+
+  async function toggleBuyers() {
+    if (buyersOpen) {
+      setBuyersOpen(false);
+      return;
+    }
+    try {
+      const rows = await request<Record<string, unknown>[]>(
+        `/group-buys/${product.groupBuyId}/buyers`,
+      );
+      setBuyers(rows.map(camelBuyer));
+      setBuyersOpen(true);
+    } catch (buyersError) {
+      onToast(
+        buyersError instanceof Error
+          ? buyersError.message
+          : "Не удалось получить покупателей",
+      );
+    }
+  }
+
+  return (
+    <article className="procurement-card">
+      <div className="procurement-head">
+        <span className="shop-avatar">{product.title.slice(0, 2).toUpperCase()}</span>
+        <div>
+          <span className="admin-status">{statusLabel[status] || status}</span>
+          <h2>{product.title}</h2>
+          <p>{product.reservedCount} из {product.targetCount || 0} участников · {formatPrice(product.buyerPriceKopecks)}</p>
+        </div>
+        <button type="button" onClick={() => void toggleBuyers()} aria-label="Показать покупателей">
+          <ChevronDown size={19} />
+        </button>
+      </div>
+
+      {status === "PRICE_CONFIRMATION" && (
+        <form
+          className="price-fix-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            void runAction(
+              () =>
+                request(`/group-buys/${product.groupBuyId}/open-payment`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    finalPriceKopecks: Number(form.get("price")) * 100,
+                    deadlineHours: Number(form.get("hours")),
+                  }),
+                }),
+              "Цена зафиксирована, участникам отправлен запрос оплаты",
+            );
+          }}
+        >
+          <h3>Зафиксировать актуальную цену</h3>
+          <p>После сохранения у участников будет 24–48 часов на оплату продавцу.</p>
+          <div className="price-input-row">
+            <label><span>Цена продавца, ₽</span><input name="price" type="number" min="1" defaultValue={Math.round(product.sellerPriceKopecks / 100)} required /></label>
+            <label><span>Срок оплаты</span><select name="hours" defaultValue="48"><option value="24">24 часа</option><option value="48">48 часов</option></select></label>
+          </div>
+          <button className="main-action" disabled={actionSaving}>{actionSaving ? "Отправляем…" : "Обновить цену и запросить оплату"}</button>
+        </form>
+      )}
+
+      {status === "AWAITING_PAYMENT" && (
+        <div className="admin-action-panel">
+          <p>Проверьте поступления. Подтвердить закупку можно, когда все участники отметили оплату.</p>
+          <button
+            className="main-action"
+            disabled={actionSaving}
+            onClick={() =>
+              void runAction(
+                () => request(`/group-buys/${product.groupBuyId}/confirm`, { method: "POST" }),
+                "Закупка подтверждена, участники уведомлены",
+              )
+            }
+          >
+            Подтвердить закупку
+          </button>
+        </div>
+      )}
+
+      {(status === "FORMED" || status === "IN_DELIVERY") && (
+        <form
+          className="delivery-form admin-action-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            const from = new Date(`${String(form.get("from"))}T00:00:00`).toISOString();
+            const to = new Date(`${String(form.get("to"))}T23:59:59`).toISOString();
+            void runAction(
+              () =>
+                request(`/group-buys/${product.groupBuyId}/delivery`, {
+                  method: "PUT",
+                  body: JSON.stringify({ from, to, note: String(form.get("note")) }),
+                }),
+              "Ориентир поставки отправлен всем покупателям",
+            );
+          }}
+        >
+          <h3>Ориентировочный срок поставки</h3>
+          <div>
+            <input name="from" type="date" required />
+            <span>—</span>
+            <input name="to" type="date" required />
+          </div>
+          <textarea name="note" required rows={3} placeholder="Комментарий о доставке" />
+          <button className="main-action" disabled={actionSaving}>Уведомить покупателей</button>
+        </form>
+      )}
+
+      {buyersOpen && (
+        <div className="buyers-panel">
+          <div className="buyers-head"><h3>Покупатели и контакты</h3><span>{buyers.length}</span></div>
+          <div className="buyers-list">
+            {buyers.map((buyer) => (
+              <div key={buyer.telegramId}>
+                <span className="buyer-avatar">{buyer.name.slice(0, 2).toUpperCase()}</span>
+                <p><b>{buyer.name}</b><small>{buyer.phone || "Телефон не указан"}{buyer.username ? ` · @${buyer.username}` : ""}</small></p>
+                <em className={buyer.status === "PAID" ? "paid" : ""}>{buyer.status}</em>
+              </div>
+            ))}
+            {!buyers.length && <div className="empty-inline">Броней пока нет.</div>}
+          </div>
+        </div>
+      )}
+    </article>
   );
 }
 
 function SuperAdmin({
   categories,
-  clubs,
   request,
   onCategoriesChanged,
   onToast,
 }: {
   categories: Category[];
-  clubs: Club[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onCategoriesChanged: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"categories" | "groups">("categories");
+  const [tab, setTab] = useState<"categories" | "groups" | "settings" | "debts">("categories");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
+  const [debts, setDebts] = useState<Record<string, unknown>[]>([]);
+  const [settings, setSettings] = useState<GlobalSettings>({
+    botCommissionPercent: 0,
+    debtLimitKopecks: 0,
+  });
+
+  useEffect(() => {
+    void loadAdminData();
+    // Admin data is loaded once when this protected screen opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadAdminData() {
+    try {
+      const [groupRows, settingsRow, debtRows] = await Promise.all([
+        request<Record<string, unknown>[]>("/admin/groups"),
+        request<Record<string, unknown>>("/admin/settings"),
+        request<Record<string, unknown>[]>("/admin/debts"),
+      ]);
+      setAdminGroups(groupRows.map(camelAdminGroup));
+      setSettings({
+        botCommissionPercent: asNumber(settingsRow.bot_commission_percent),
+        debtLimitKopecks: asNumber(settingsRow.default_debt_limit_kopecks),
+      });
+      setDebts(debtRows);
+    } catch (adminError) {
+      onToast(
+        adminError instanceof Error
+          ? adminError.message
+          : "Не удалось загрузить настройки",
+      );
+    }
+  }
 
   return (
     <section className="inner-page admin-page">
@@ -1144,6 +1688,8 @@ function SuperAdmin({
       <div className="admin-tabs">
         <button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Категории</button>
         <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы</button>
+        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Комиссия</button>
+        <button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}>Долги</button>
       </div>
       {tab === "categories" && (
         <div className="settings-card">
@@ -1178,14 +1724,125 @@ function SuperAdmin({
       )}
       {tab === "groups" && (
         <div className="admin-table-card">
-          <div className="table-heading"><div><h2>Подключённые группы</h2><p>{clubs.length} в SQLite</p></div></div>
-          {clubs.map((club) => (
-            <div className="group-admin-row" key={club.id}><span className="shop-avatar">{club.title.slice(0, 2).toUpperCase()}</span><p><b>{club.title}</b><small>Telegram ID: {club.telegramGroupId}</small></p><strong>{club.productCount} товаров</strong><em>АКТИВНА</em></div>
+          <div className="table-heading"><div><h2>Подключённые группы</h2><p>{adminGroups.length} в SQLite</p></div></div>
+          {adminGroups.map((club) => (
+            <AdminGroupRow
+              key={club.id}
+              club={club}
+              request={request}
+              onSaved={async () => {
+                await loadAdminData();
+                onToast("Настройки группы сохранены");
+              }}
+            />
           ))}
-          {!clubs.length && <div className="empty-inline">Группы ещё не подключены.</div>}
+          {!adminGroups.length && <div className="empty-inline">Группы ещё не подключены.</div>}
+        </div>
+      )}
+      {tab === "settings" && (
+        <form
+          className="settings-card admin-settings-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setSaving(true);
+            try {
+              await request("/admin/settings", {
+                method: "PUT",
+                body: JSON.stringify(settings),
+              });
+              await loadAdminData();
+              onToast("Глобальные настройки сохранены");
+            } catch (settingsError) {
+              onToast(settingsError instanceof Error ? settingsError.message : "Не удалось сохранить настройки");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          <div><h2>Комиссия платформы</h2><p className="settings-hint">Применяется ко всем продавцам и участвует в расчёте цены покупателя.</p></div>
+          <label><span>Комиссия бота, %</span><input type="number" min="0" max="30" step="0.1" value={settings.botCommissionPercent} onChange={(event) => setSettings((current) => ({ ...current, botCommissionPercent: Number(event.target.value) }))} required /></label>
+          <label><span>Лимит долга продавца, ₽</span><input type="number" min="1" value={Math.round(settings.debtLimitKopecks / 100)} onChange={(event) => setSettings((current) => ({ ...current, debtLimitKopecks: Number(event.target.value) * 100 }))} required /></label>
+          <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
+        </form>
+      )}
+      {tab === "debts" && (
+        <div className="admin-table-card">
+          <div className="table-heading"><div><h2>Комиссионные долги</h2><p>Фактические данные продавцов</p></div></div>
+          {debts.map((debt) => {
+            const sellerId = asNumber(debt.telegram_id);
+            const amount = asNumber(debt.commission_debt_kopecks);
+            const sellerName = [debt.first_name, debt.last_name].filter(Boolean).join(" ") || `ID ${sellerId}`;
+            return (
+              <div className={`debt-row ${asBoolean(debt.seller_blocked) ? "blocked" : ""}`} key={sellerId}>
+                <span className="shop-avatar">{sellerName.slice(0, 2).toUpperCase()}</span>
+                <p><b>{sellerName}</b><small>{debt.username ? `@${String(debt.username)}` : `Telegram ID: ${sellerId}`}</small></p>
+                <strong>{formatPrice(amount)}</strong>
+                <em>{asBoolean(debt.seller_blocked) ? "ЗАБЛОКИРОВАН" : "АКТИВЕН"}</em>
+                <button
+                  onClick={async () => {
+                    try {
+                      await request(`/admin/debts/${sellerId}/repay`, {
+                        method: "POST",
+                        body: JSON.stringify({ amountKopecks: amount }),
+                      });
+                      await loadAdminData();
+                      onToast("Долг погашен");
+                    } catch (repayError) {
+                      onToast(repayError instanceof Error ? repayError.message : "Не удалось погасить долг");
+                    }
+                  }}
+                >
+                  Погасить
+                </button>
+              </div>
+            );
+          })}
+          {!debts.length && <div className="empty-inline">Задолженностей нет.</div>}
         </div>
       )}
     </section>
+  );
+}
+
+function AdminGroupRow({
+  club,
+  request,
+  onSaved,
+}: {
+  club: AdminGroup;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onSaved: () => Promise<void>;
+}) {
+  const [commission, setCommission] = useState(String(club.commissionPercent));
+  const [active, setActive] = useState(club.active);
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <form
+      className="group-management-row"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await request(`/admin/groups/${club.id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              commissionPercent: Number(commission),
+              active,
+            }),
+          });
+          await onSaved();
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <span className="shop-avatar">{club.title.slice(0, 2).toUpperCase()}</span>
+      <p><b>{club.title}</b><small>{club.productCount} товаров · {club.stores} магазинов · ID {club.telegramGroupId}</small></p>
+      <label><span>Комиссия, %</span><input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} /></label>
+      <label className="active-check"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /><span>{active ? "Активна" : "Отключена"}</span></label>
+      <button disabled={saving}>{saving ? "…" : "Сохранить"}</button>
+    </form>
   );
 }
 

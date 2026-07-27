@@ -5,6 +5,8 @@ import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -13,15 +15,14 @@ import java.util.Map;
 
 @Service
 public class MarketplaceService {
+    private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
     private final JdbcTemplate jdbc;
     private final TelegramApiClient telegram;
-    private final RedlineProperties properties;
 
     public MarketplaceService(JdbcTemplate jdbc, TelegramApiClient telegram,
                               RedlineProperties properties) {
         this.jdbc = jdbc;
         this.telegram = telegram;
-        this.properties = properties;
     }
 
     @Transactional
@@ -31,15 +32,17 @@ public class MarketplaceService {
                   telegram_id, username, first_name, last_name,
                   bot_commission_percent, debt_limit_kopecks
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (
+                  ?, ?, ?, ?,
+                  (SELECT bot_commission_percent FROM platform_settings WHERE singleton = 1),
+                  (SELECT default_debt_limit_kopecks FROM platform_settings WHERE singleton = 1)
+                )
                 ON CONFLICT (telegram_id) DO UPDATE SET
                   username = EXCLUDED.username,
                   first_name = EXCLUDED.first_name,
                   last_name = EXCLUDED.last_name,
                   updated_at = CURRENT_TIMESTAMP
-                """, user.id(), user.username(), user.firstName(), user.lastName(),
-                properties.marketplace().botCommissionPercent(),
-                properties.marketplace().defaultDebtLimitKopecks());
+                """, user.id(), user.username(), user.firstName(), user.lastName());
     }
 
     @Transactional
@@ -64,6 +67,7 @@ public class MarketplaceService {
                          (1 + s.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, st.name AS store_name,
+                       st.seller_telegram_id,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(r.id) AS review_count,
                        gb.id AS group_buy_id, gb.target_count,
@@ -116,7 +120,12 @@ public class MarketplaceService {
                     """, productId, input.targetCount(),
                     Instant.now().plus(input.collectionDays(), ChronoUnit.DAYS).toString());
         }
-        publishProduct(productId);
+        try {
+            publishProduct(productId);
+        } catch (RuntimeException publishError) {
+            log.warn("Product {} was saved, but Telegram publication failed: {}",
+                    productId, publishError.getMessage());
+        }
         return productId;
     }
 
@@ -141,20 +150,35 @@ public class MarketplaceService {
     public Map<String, Object> profile(long telegramId) {
         return jdbc.queryForMap("""
                 SELECT telegram_id, username, first_name, last_name,
-                       display_name, phone, registered, seller_blocked,
+                       display_name, phone, selected_group_id, registered, seller_blocked,
                        commission_debt_kopecks, debt_limit_kopecks
                 FROM users WHERE telegram_id = ?
                 """, telegramId);
     }
 
     @Transactional
-    public void registerProfile(long telegramId, String displayName, String phone) {
+    public void registerProfile(long telegramId, String displayName, String phone, Long groupId) {
+        validateActiveGroup(groupId);
         int updated = jdbc.update("""
                 UPDATE users
-                SET display_name = ?, phone = ?, registered = 1,
+                SET display_name = ?, phone = ?, selected_group_id = ?, registered = 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ?
-                """, displayName.strip(), phone.strip(), telegramId);
+                """, displayName.strip(), phone.strip(), groupId, telegramId);
+        if (updated == 0) throw new IllegalArgumentException("Telegram user is not initialized");
+    }
+
+    public void registerProfile(long telegramId, String displayName, String phone) {
+        registerProfile(telegramId, displayName, phone, null);
+    }
+
+    @Transactional
+    public void selectGroup(long telegramId, long groupId) {
+        validateActiveGroup(groupId);
+        int updated = jdbc.update("""
+                UPDATE users SET selected_group_id = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ?
+                """, groupId, telegramId);
         if (updated == 0) throw new IllegalArgumentException("Telegram user is not initialized");
     }
 
@@ -252,6 +276,10 @@ public class MarketplaceService {
                     payment_deadline = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'PRICE_CONFIRMATION'
                 """, finalPriceKopecks, deadline.toString(), groupBuyId);
+        jdbc.update("""
+                UPDATE group_buy_reservations SET status = 'PAYMENT_REQUESTED'
+                WHERE group_buy_id = ? AND status = 'RESERVED'
+                """, groupBuyId);
         List<Long> buyers = participantIds(groupBuyId);
         buyers.forEach(id -> telegram.sendMessage(id, """
                 <b>Закупка собрана!</b>
@@ -414,12 +442,41 @@ public class MarketplaceService {
                 SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
                        g.shop_thread_id, g.commission_percent, g.active,
                        COUNT(DISTINCT s.id) AS stores,
+                       COUNT(DISTINCT p.id) FILTER (WHERE p.active = 1) AS product_count,
                        COUNT(DISTINCT o.id) FILTER (WHERE o.status = 'COMPLETED') AS completed_orders
                 FROM telegram_groups g
                 LEFT JOIN stores s ON s.group_id = g.id
+                LEFT JOIN products p ON p.group_id = g.id
                 LEFT JOIN orders o ON o.group_id = g.id
                 GROUP BY g.id
                 ORDER BY g.created_at DESC
+                """);
+    }
+
+    public Map<String, Object> groupAdminStats(long telegramGroupId, long ownerTelegramId) {
+        assertGroupOwner(telegramGroupId, ownerTelegramId);
+        return jdbc.queryForMap("""
+                SELECT
+                  (SELECT COUNT(*) FROM products p
+                   WHERE p.group_id = g.id AND p.active = 1) AS products,
+                  (SELECT COUNT(*) FROM stores s
+                   WHERE s.group_id = g.id AND s.active = 1) AS sellers,
+                  (SELECT COUNT(*) FROM orders o
+                   WHERE o.group_id = g.id AND o.status = 'COMPLETED') AS completed_orders,
+                  (SELECT COALESCE(SUM(ROUND(
+                     o.seller_price_kopecks * g.commission_percent / 100
+                   )), 0) FROM orders o
+                   WHERE o.group_id = g.id AND o.status = 'COMPLETED')
+                    AS group_commission_kopecks
+                FROM telegram_groups g
+                WHERE g.telegram_group_id = ? AND g.owner_telegram_id = ?
+                """, telegramGroupId, ownerTelegramId);
+    }
+
+    public Map<String, Object> globalSettings() {
+        return jdbc.queryForMap("""
+                SELECT bot_commission_percent, default_debt_limit_kopecks
+                FROM platform_settings WHERE singleton = 1
                 """);
     }
 
@@ -446,6 +503,76 @@ public class MarketplaceService {
                 WHERE telegram_group_id = ? AND owner_telegram_id = ?
                 """, commissionPercent, telegramGroupId, ownerTelegramId);
         if (updated == 0) throw new IllegalArgumentException("Group owner access required");
+    }
+
+    @Transactional
+    public void updateGroupAsSuperAdmin(long groupId, double commissionPercent, boolean active) {
+        int updated = jdbc.update("""
+                UPDATE telegram_groups SET commission_percent = ?, active = ?
+                WHERE id = ?
+                """, commissionPercent, active, groupId);
+        if (updated == 0) throw new IllegalArgumentException("Group not found");
+    }
+
+    @Transactional
+    public void deactivateProduct(long telegramGroupId, long ownerTelegramId, long productId) {
+        int updated = jdbc.update("""
+                UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND group_id = (
+                  SELECT id FROM telegram_groups
+                  WHERE telegram_group_id = ? AND owner_telegram_id = ?
+                )
+                """, productId, telegramGroupId, ownerTelegramId);
+        if (updated == 0) throw new IllegalArgumentException("Product or group owner access not found");
+    }
+
+    @Transactional
+    public void setGroupSellerBan(long telegramGroupId, long ownerTelegramId,
+                                  long sellerTelegramId, boolean banned) {
+        Long groupId = jdbc.queryForObject("""
+                SELECT id FROM telegram_groups
+                WHERE telegram_group_id = ? AND owner_telegram_id = ?
+                """, Long.class, telegramGroupId, ownerTelegramId);
+        if (groupId == null) throw new IllegalArgumentException("Group owner access required");
+        if (banned) {
+            jdbc.update("""
+                    INSERT INTO group_seller_bans (group_id, seller_telegram_id, reason)
+                    VALUES (?, ?, 'Заблокирован владельцем группы')
+                    ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
+                      reason = EXCLUDED.reason
+                    """, groupId, sellerTelegramId);
+            jdbc.update("""
+                    UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP
+                    WHERE group_id = ? AND store_id IN (
+                      SELECT id FROM stores WHERE seller_telegram_id = ?
+                    )
+                    """, groupId, sellerTelegramId);
+        } else {
+            jdbc.update("""
+                    DELETE FROM group_seller_bans
+                    WHERE group_id = ? AND seller_telegram_id = ?
+                    """, groupId, sellerTelegramId);
+        }
+    }
+
+    private void assertGroupOwner(long telegramGroupId, long ownerTelegramId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM telegram_groups
+                WHERE telegram_group_id = ? AND owner_telegram_id = ?
+                """, Integer.class, telegramGroupId, ownerTelegramId);
+        if (count == null || count == 0) {
+            throw new IllegalArgumentException("Group owner access required");
+        }
+    }
+
+    private void validateActiveGroup(Long groupId) {
+        if (groupId == null) return;
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM telegram_groups WHERE id = ? AND active = 1
+                """, Integer.class, groupId);
+        if (count == null || count == 0) {
+            throw new IllegalArgumentException("Selected club is not available");
+        }
     }
 
     private void assertSellerCanTrade(long sellerId, long groupId) {

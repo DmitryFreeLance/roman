@@ -42,6 +42,8 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
                     default_debt_limit_kopecks = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE singleton = 1
+                  AND NOT EXISTS (SELECT 1 FROM users)
+                  AND NOT EXISTS (SELECT 1 FROM telegram_groups)
                 """, marketplace.botCommissionPercent(),
                 marketplace.defaultDebtLimitKopecks());
     }
@@ -58,6 +60,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         }
         if (!columns.contains("registered")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN registered INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!columns.contains("selected_group_id")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN selected_group_id INTEGER");
         }
     }
 }

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_name TEXT,
   display_name TEXT,
   phone TEXT,
+  selected_group_id INTEGER,
   registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),
   bot_commission_percent REAL NOT NULL DEFAULT 5.0,
   commission_debt_kopecks INTEGER NOT NULL DEFAULT 0,

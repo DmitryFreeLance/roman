@@ -3,8 +3,13 @@ package club.redline.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Component;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 @Component
 public class TelegramUpdateHandler {
+    private static final Pattern PRODUCT_START =
+            Pattern.compile("^/start\\s+product_(\\d+)_(-?\\d+)$");
     private final TelegramApiClient telegram;
     private final MarketplaceService marketplace;
 
@@ -20,12 +25,24 @@ public class TelegramUpdateHandler {
             return;
         }
         JsonNode message = update.path("message");
-        if (message.path("text").asText("").startsWith("/start")) {
+        String text = message.path("text").asText("");
+        if (text.startsWith("/start")) {
             long chatId = message.path("chat").path("id").asLong();
+            if (!"private".equals(message.path("chat").path("type").asText())) {
+                telegram.sendMessage(chatId, """
+                        <b>REDLINE работает через Mini App.</b>
+                        Откройте личный чат с ботом и нажмите «Запустить».
+                        """);
+                return;
+            }
+            Matcher productStart = PRODUCT_START.matcher(text);
+            String query = productStart.matches()
+                    ? "product=" + productStart.group(1) + "&group=" + productStart.group(2)
+                    : "";
             telegram.sendMiniAppButton(chatId, """
                     <b>REDLINE CLUB</b>
                     Автотовары, проверенные продавцы и групповые закупки вашего клуба.
-                    """);
+                    """, query);
         }
     }
 
@@ -37,7 +54,9 @@ public class TelegramUpdateHandler {
             if ("member".equals(status)) {
                 telegram.sendMessage(groupId, """
                         <b>REDLINE пока не подключён.</b>
-                        Назначьте бота администратором и разрешите управление темами.
+                        1. Включите «Темы» в настройках группы.
+                        2. Назначьте бота администратором.
+                        3. Разрешите боту управление темами.
                         """);
             }
             return;

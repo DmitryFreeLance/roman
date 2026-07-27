@@ -54,7 +54,16 @@ public class MarketplaceController {
     public void register(@RequestHeader("X-Telegram-Init-Data") String initData,
                          @Valid @RequestBody RegistrationRequest request) {
         TelegramUser user = authenticated(initData);
-        marketplace.registerProfile(user.id(), request.displayName(), request.phone());
+        marketplace.registerProfile(
+                user.id(), request.displayName(), request.phone(), request.groupId()
+        );
+    }
+
+    @PutMapping("/me/group/{groupId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void selectGroup(@RequestHeader("X-Telegram-Init-Data") String initData,
+                            @PathVariable @Positive long groupId) {
+        marketplace.selectGroup(registered(initData).id(), groupId);
     }
 
     @GetMapping("/groups")
@@ -180,6 +189,39 @@ public class MarketplaceController {
         );
     }
 
+    @GetMapping("/groups/{telegramGroupId}/admin/stats")
+    public Map<String, Object> groupAdminStats(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.groupAdminStats(
+                telegramGroupId, registered(initData).id()
+        );
+    }
+
+    @DeleteMapping("/groups/{telegramGroupId}/products/{productId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deactivateProduct(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId,
+            @PathVariable long productId) {
+        marketplace.deactivateProduct(
+                telegramGroupId, registered(initData).id(), productId
+        );
+    }
+
+    @PutMapping("/groups/{telegramGroupId}/sellers/{sellerTelegramId}/ban")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setGroupSellerBan(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId,
+            @PathVariable long sellerTelegramId,
+            @RequestBody SellerBanRequest request) {
+        marketplace.setGroupSellerBan(
+                telegramGroupId, registered(initData).id(),
+                sellerTelegramId, request.banned()
+        );
+    }
+
     @GetMapping("/admin/debts")
     public List<Map<String, Object>> debts(
             @RequestHeader("X-Telegram-Init-Data") String initData) {
@@ -201,6 +243,24 @@ public class MarketplaceController {
             @RequestHeader("X-Telegram-Init-Data") String initData) {
         requireSuperAdmin(initData);
         return marketplace.groups();
+    }
+
+    @PutMapping("/admin/groups/{groupId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateGroup(@RequestHeader("X-Telegram-Init-Data") String initData,
+                            @PathVariable long groupId,
+                            @Valid @RequestBody AdminGroupRequest request) {
+        requireSuperAdmin(initData);
+        marketplace.updateGroupAsSuperAdmin(
+                groupId, request.commissionPercent(), request.active()
+        );
+    }
+
+    @GetMapping("/admin/settings")
+    public Map<String, Object> settings(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        requireSuperAdmin(initData);
+        return marketplace.globalSettings();
     }
 
     @PutMapping("/admin/settings")
@@ -260,7 +320,8 @@ public class MarketplaceController {
     }
 
     public record RegistrationRequest(@NotBlank String displayName,
-                                      @NotBlank String phone) {}
+                                      @NotBlank String phone,
+                                      @Positive Long groupId) {}
     public record CategoryRequest(@NotBlank String name) {}
     public record CreateProductRequest(
             long groupId,
@@ -286,6 +347,9 @@ public class MarketplaceController {
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
     public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent) {}
+    public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
+                                    boolean active) {}
+    public record SellerBanRequest(boolean banned) {}
     public record RepayDebtRequest(@Positive long amountKopecks) {}
     public record GlobalSettingsRequest(@Min(0) @Max(30) double botCommissionPercent,
                                         @Positive long debtLimitKopecks) {}

@@ -15,6 +15,7 @@ import java.util.Map;
 public class TelegramApiClient {
     private final RestClient client;
     private final RedlineProperties properties;
+    private volatile String botUsername;
 
     public TelegramApiClient(RestClient.Builder builder, RedlineProperties properties) {
         this.properties = properties;
@@ -49,6 +50,13 @@ public class TelegramApiClient {
     }
 
     public void sendMiniAppButton(long chatId, String text) {
+        sendMiniAppButton(chatId, text, "");
+    }
+
+    public void sendMiniAppButton(long chatId, String text, String query) {
+        String separator = properties.telegram().miniAppUrl().contains("?") ? "&" : "?";
+        String targetUrl = properties.telegram().miniAppUrl() +
+                (query == null || query.isBlank() ? "" : separator + query);
         call("sendMessage", Map.of(
                 "chat_id", chatId,
                 "text", text,
@@ -56,7 +64,7 @@ public class TelegramApiClient {
                 "reply_markup", Map.of(
                         "inline_keyboard", List.of(List.of(Map.of(
                                 "text", "Открыть REDLINE CLUB",
-                                "web_app", Map.of("url", properties.telegram().miniAppUrl())
+                                "web_app", Map.of("url", targetUrl)
                         )))
                 )
         ));
@@ -88,13 +96,19 @@ public class TelegramApiClient {
                 "reply_markup", Map.of(
                         "inline_keyboard", List.of(List.of(Map.of(
                                 "text", "Подробнее",
-                                "web_app", Map.of(
-                                        "url", properties.telegram().miniAppUrl() +
-                                                "?product=" + productId + "&group=" + groupId
-                                )
+                                "url", productStartLink(productId, groupId)
                         )))
                 )
         ));
+    }
+
+    private String productStartLink(long productId, long groupId) {
+        String username = botUsername;
+        if (username == null || username.isBlank()) {
+            username = call("getMe", Map.of()).path("username").asText();
+            botUsername = username;
+        }
+        return "https://t.me/" + username + "?start=product_" + productId + "_" + groupId;
     }
 
     public List<JsonNode> getUpdates(long offset) {
