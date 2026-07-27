@@ -312,6 +312,58 @@ public class MarketplaceService {
                 """, groupBuyId);
     }
 
+    public List<Map<String, Object>> commissionDebts() {
+        return jdbc.queryForList("""
+                SELECT u.telegram_id, u.username, u.first_name, u.last_name,
+                       u.commission_debt_kopecks, u.debt_limit_kopecks, u.seller_blocked,
+                       COUNT(o.id) FILTER (WHERE o.status = 'COMPLETED') AS completed_orders
+                FROM users u
+                LEFT JOIN orders o ON o.seller_telegram_id = u.telegram_id
+                WHERE u.commission_debt_kopecks > 0
+                GROUP BY u.telegram_id
+                ORDER BY u.seller_blocked DESC, u.commission_debt_kopecks DESC
+                """);
+    }
+
+    public List<Map<String, Object>> groups() {
+        return jdbc.queryForList("""
+                SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
+                       g.shop_thread_id, g.commission_percent, g.active,
+                       COUNT(DISTINCT s.id) AS stores,
+                       COUNT(DISTINCT o.id) FILTER (WHERE o.status = 'COMPLETED') AS completed_orders
+                FROM telegram_groups g
+                LEFT JOIN stores s ON s.group_id = g.id
+                LEFT JOIN orders o ON o.group_id = g.id
+                GROUP BY g.id
+                ORDER BY g.created_at DESC
+                """);
+    }
+
+    @Transactional
+    public void updateGlobalSettings(double botCommissionPercent, long debtLimitKopecks) {
+        jdbc.update("""
+                UPDATE platform_settings SET bot_commission_percent = ?,
+                  default_debt_limit_kopecks = ?, updated_at = now()
+                WHERE singleton = TRUE
+                """, botCommissionPercent, debtLimitKopecks);
+        jdbc.update("""
+                UPDATE users SET bot_commission_percent = ?, debt_limit_kopecks = ?
+                """, botCommissionPercent, debtLimitKopecks);
+        jdbc.update("""
+                UPDATE users SET seller_blocked = commission_debt_kopecks >= debt_limit_kopecks
+                """);
+    }
+
+    @Transactional
+    public void updateGroupCommission(long telegramGroupId, long ownerTelegramId,
+                                      double commissionPercent) {
+        int updated = jdbc.update("""
+                UPDATE telegram_groups SET commission_percent = ?
+                WHERE telegram_group_id = ? AND owner_telegram_id = ?
+                """, commissionPercent, telegramGroupId, ownerTelegramId);
+        if (updated == 0) throw new IllegalArgumentException("Group owner access required");
+    }
+
     private void assertSellerCanTrade(long sellerId, long groupId) {
         Map<String, Object> seller = jdbc.queryForMap("""
                 SELECT u.commission_debt_kopecks, u.debt_limit_kopecks, u.globally_banned,

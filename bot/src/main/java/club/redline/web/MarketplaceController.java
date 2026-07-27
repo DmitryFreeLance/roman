@@ -1,5 +1,6 @@
 package club.redline.web;
 
+import club.redline.config.RedlineProperties;
 import club.redline.security.TelegramInitDataVerifier;
 import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import club.redline.service.MarketplaceService;
@@ -23,10 +24,13 @@ import java.util.Map;
 public class MarketplaceController {
     private final MarketplaceService marketplace;
     private final TelegramInitDataVerifier verifier;
+    private final RedlineProperties properties;
 
-    public MarketplaceController(MarketplaceService marketplace, TelegramInitDataVerifier verifier) {
+    public MarketplaceController(MarketplaceService marketplace, TelegramInitDataVerifier verifier,
+                                 RedlineProperties properties) {
         this.marketplace = marketplace;
         this.verifier = verifier;
+        this.properties = properties;
     }
 
     @GetMapping("/groups/{groupId}/catalog")
@@ -119,9 +123,60 @@ public class MarketplaceController {
         marketplace.advanceOrder(id, authenticated(initData).id(), status.toUpperCase());
     }
 
+    @PutMapping("/groups/{telegramGroupId}/commission")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateGroupCommission(@RequestHeader("X-Telegram-Init-Data") String initData,
+                                      @PathVariable long telegramGroupId,
+                                      @Valid @RequestBody GroupCommissionRequest request) {
+        marketplace.updateGroupCommission(
+                telegramGroupId, authenticated(initData).id(), request.commissionPercent()
+        );
+    }
+
+    @GetMapping("/admin/debts")
+    public List<Map<String, Object>> debts(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        requireSuperAdmin(initData);
+        return marketplace.commissionDebts();
+    }
+
+    @PostMapping("/admin/debts/{sellerTelegramId}/repay")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void repayDebt(@RequestHeader("X-Telegram-Init-Data") String initData,
+                          @PathVariable long sellerTelegramId,
+                          @Valid @RequestBody RepayDebtRequest request) {
+        TelegramUser admin = requireSuperAdmin(initData);
+        marketplace.repayDebt(sellerTelegramId, request.amountKopecks(), admin.id());
+    }
+
+    @GetMapping("/admin/groups")
+    public List<Map<String, Object>> groups(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        requireSuperAdmin(initData);
+        return marketplace.groups();
+    }
+
+    @PutMapping("/admin/settings")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateSettings(@RequestHeader("X-Telegram-Init-Data") String initData,
+                               @Valid @RequestBody GlobalSettingsRequest request) {
+        requireSuperAdmin(initData);
+        marketplace.updateGlobalSettings(
+                request.botCommissionPercent(), request.debtLimitKopecks()
+        );
+    }
+
     private TelegramUser authenticated(String initData) {
         TelegramUser user = verifier.verify(initData);
         marketplace.upsertUser(user);
+        return user;
+    }
+
+    private TelegramUser requireSuperAdmin(String initData) {
+        TelegramUser user = authenticated(initData);
+        if (user.id() != properties.marketplace().superAdminTelegramId()) {
+            throw new IllegalArgumentException("Super-admin access required");
+        }
         return user;
     }
 
@@ -148,4 +203,8 @@ public class MarketplaceController {
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
+    public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent) {}
+    public record RepayDebtRequest(@Positive long amountKopecks) {}
+    public record GlobalSettingsRequest(@Min(0) @Max(30) double botCommissionPercent,
+                                        @Positive long debtLimitKopecks) {}
 }

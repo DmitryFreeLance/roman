@@ -7,6 +7,15 @@ CREATE TYPE group_buy_status AS ENUM (
 CREATE TYPE reservation_status AS ENUM ('RESERVED', 'PAYMENT_REQUESTED', 'PAID', 'CANCELLED', 'COMPLETED');
 CREATE TYPE ledger_entry_type AS ENUM ('ACCRUAL', 'REPAYMENT', 'WRITE_OFF');
 
+CREATE TABLE platform_settings (
+  singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  bot_commission_percent NUMERIC(6,3) NOT NULL DEFAULT 5.0,
+  default_debt_limit_kopecks BIGINT NOT NULL DEFAULT 50000,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO platform_settings (singleton) VALUES (TRUE);
+
 CREATE TABLE users (
   telegram_id BIGINT PRIMARY KEY,
   username TEXT,

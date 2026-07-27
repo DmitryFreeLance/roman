@@ -424,6 +424,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .switch.on { background: var(--red-dark); }
 .switch.on i { margin-left: auto; background: var(--red-2); }
 .support-card { display: flex; align-items: center; gap: 13px; background: linear-gradient(135deg,#281013,#111); border: 1px solid rgba(227,27,35,.28); padding: 18px; }
+.super-metrics > div:first-child { border-top-color: rgba(227,27,35,.7); }
+.super-grid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 14px; }
+.danger-count { min-width: 28px; height: 28px; padding: 0 8px; display: grid; place-items: center; border-radius: 16px; color: #fff; background: var(--red); font-size: 9px; font-weight: 900; }
+.attention-row, .group-admin-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+.attention-row p, .group-admin-row p { display: flex; flex-direction: column; margin: 0; }
+.attention-row p b, .group-admin-row p b { font-size: 9px; }
+.attention-row p small, .group-admin-row p small { color: #666; font-size: 7px; margin-top: 2px; }
+.attention-row > strong, .group-admin-row > strong { font-size: 9px; }
+.attention-row > button, .group-admin-row > button { min-width: 34px; height: 31px; border: 1px solid var(--line); background: #202020; color: #aaa; font-size: 7px; cursor: pointer; display: grid; place-items: center; padding: 0 9px; }
+.group-admin-row { grid-template-columns: auto 1fr auto auto auto; }
+.group-admin-row > em { font-style: normal; color: var(--green); font-size: 7px; }
+.group-admin-row > em.neutral-status { color: #888; }
+.group-admin-row > button.ban-action { color: var(--red); border-color: rgba(227,27,35,.25); }
 .support-card > svg { color: var(--red); }
 .support-card > div { display: flex; flex-direction: column; flex: 1; }
 .support-card b { font-size: 11px; }
@@ -508,6 +521,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .admin-flow { padding-left: 4px; padding-right: 4px; }
   .admin-flow span { font-size: 6px; }
   .price-input-row { grid-template-columns: 1fr; }
+  .super-grid { grid-template-columns: 1fr; }
+  .group-admin-row { grid-template-columns: auto 1fr auto; }
+  .group-admin-row > em { grid-column: 2; }
+  .group-admin-row > button { grid-column: 3; grid-row: 2; }
   .debt-row { grid-template-columns: auto 1fr auto; }
   .debt-row > em { grid-column: 2; }
   .debt-row > button { grid-column: 3; grid-row: 2; }

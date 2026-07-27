@@ -11,6 +11,7 @@ import {
   CircleHelp,
   Clock3,
   CreditCard,
+  Crown,
   Gauge,
   Heart,
   House,
@@ -22,6 +23,7 @@ import {
   PackagePlus,
   Pencil,
   Search,
+  Settings,
   ShieldCheck,
   ShoppingBag,
   SlidersHorizontal,
@@ -44,6 +46,7 @@ type Screen =
   | "balance"
   | "create"
   | "admin"
+  | "superadmin"
   | "help";
 type ProductKind = "group" | "regular";
 type Product = {
@@ -163,6 +166,7 @@ const navItems: { id: Screen; label: string; icon: React.ElementType }[] = [
   { id: "create", label: "Создать объявление", icon: PackagePlus },
   { id: "balance", label: "Баланс и комиссии", icon: WalletCards },
   { id: "admin", label: "Админка группы", icon: LayoutDashboard },
+  { id: "superadmin", label: "Супер-админ", icon: Crown },
   { id: "help", label: "Помощь", icon: CircleHelp },
 ];
 
@@ -307,6 +311,7 @@ export function RedlineApp() {
                 <span>{item.label}</span>
                 {item.id === "group" && <em>2</em>}
                 {item.id === "admin" && <small>OWNER</small>}
+                {item.id === "superadmin" && <small>SUPER</small>}
                 {disabled && <LockKeyhole size={14} />}
               </button>
             );
@@ -452,6 +457,7 @@ export function RedlineApp() {
             onToast={setToast}
           />
         )}
+        {screen === "superadmin" && <SuperAdmin onToast={setToast} />}
         {screen === "help" && <Help />}
       </div>
 
@@ -877,6 +883,63 @@ function Help() {
       <h3 className="subsection-title">Частые вопросы</h3>
       <div className="faq-list">{questions.map((item, index) => <button key={item[0]} className={open === index ? "open" : ""} onClick={() => setOpen(open === index ? -1 : index)}><span><b>{item[0]}</b><ChevronDown size={18} /></span><p>{item[1]}</p></button>)}</div>
       <div className="legal-card"><ShieldCheck size={22} /><div><b>Важное о расчётах</b><p>REDLINE CLUB — информационная площадка и не является платёжным агентом. Все расчёты происходят напрямую между покупателем и продавцом.</p></div></div>
+    </section>
+  );
+}
+
+function SuperAdmin({ onToast }: { onToast: (value: string) => void }) {
+  const [tab, setTab] = useState<"overview" | "groups" | "users">("overview");
+  return (
+    <section className="inner-page admin-page">
+      <div className="page-title">
+        <span className="section-kicker"><Crown size={13} /> PLATFORM OWNER</span>
+        <h1>Супер-админ</h1>
+        <p>Глобальное управление REDLINE CLUB</p>
+      </div>
+      <div className="admin-tabs">
+        <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>Финансы</button>
+        <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы</button>
+        <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Пользователи</button>
+      </div>
+      {tab === "overview" && (
+        <>
+          <div className="admin-metrics super-metrics">
+            <div><span>Оборот платформы</span><b>18,6 млн ₽</b><small>+14,8% за месяц</small></div>
+            <div><span>Начислено комиссий</span><b>1,24 млн ₽</b><small>6,7% от оборота</small></div>
+            <div><span>Активные группы</span><b>38</b><small>12 840 пользователей</small></div>
+          </div>
+          <div className="super-grid">
+            <div className="settings-card">
+              <h2>Глобальные настройки</h2>
+              <label><span>Базовая комиссия бота</span><div className="input-suffix"><input type="number" defaultValue="5" step=".1" /><b>%</b></div></label>
+              <label><span>Лимит долга для блокировки</span><div className="input-suffix"><input type="number" defaultValue="500" /><b>₽</b></div></label>
+              <button className="main-action" onClick={() => onToast("Глобальные настройки сохранены")}>Сохранить</button>
+            </div>
+            <div className="admin-table-card">
+              <div className="table-heading"><div><h2>Требуют внимания</h2><p>Продавцы выше лимита</p></div><span className="danger-count">12</span></div>
+              {[["RL", "RaceLab Siberia", "620 ₽"], ["CW", "Carbon Works", "1 340 ₽"], ["AS", "AutoSound Pro", "890 ₽"]].map((seller) => (
+                <div className="attention-row" key={seller[1]}><span className="shop-avatar">{seller[0]}</span><p><b>{seller[1]}</b><small>Продажи заблокированы</small></p><strong>{seller[2]}</strong><button onClick={() => onToast(`Долг ${seller[1]} погашен`)}>Погасить</button></div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      {tab === "groups" && (
+        <div className="admin-table-card">
+          <div className="table-heading"><div><h2>Подключённые группы</h2><p>38 активных сообществ</p></div><button>Экспорт</button></div>
+          {[["BS", "BMW Siberia", "8 412", "3,5%"], ["PC", "Porsche Club RU", "4 185", "4,0%"], ["JC", "JDM Community", "6 920", "3,0%"]].map((group) => (
+            <div className="group-admin-row" key={group[1]}><span className="shop-avatar">{group[0]}</span><p><b>{group[1]}</b><small>{group[2]} участников</small></p><strong>{group[3]}</strong><em>АКТИВНА</em><button onClick={() => onToast(`Настройки ${group[1]} открыты`)}><Settings size={16} /></button></div>
+          ))}
+        </div>
+      )}
+      {tab === "users" && (
+        <div className="admin-table-card">
+          <div className="table-heading"><div><h2>Пользователи</h2><p>Поиск и глобальная модерация</p></div><button>Найти по ID</button></div>
+          {[["АК", "Алексей К.", "@alex_k", "Покупатель"], ["FD", "Forge District", "@forgedistrict", "Продавец"], ["AP", "Антон П.", "ID 62184013", "Владелец группы"]].map((user) => (
+            <div className="group-admin-row" key={user[1]}><span className="buyer-avatar">{user[0]}</span><p><b>{user[1]}</b><small>{user[2]}</small></p><strong>{user[3]}</strong><em className="neutral-status">АКТИВЕН</em><button className="ban-action" onClick={() => onToast(`${user[1]} заблокирован глобально`)}>Бан</button></div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
