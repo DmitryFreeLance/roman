@@ -1,16 +1,21 @@
 package club.redline.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.SmartLifecycle;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
-public class TelegramLongPollingRunner implements SmartLifecycle {
+@Order(Ordered.LOWEST_PRECEDENCE)
+public class TelegramLongPollingRunner implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(TelegramLongPollingRunner.class);
 
     private final TelegramApiClient telegram;
@@ -25,7 +30,7 @@ public class TelegramLongPollingRunner implements SmartLifecycle {
     }
 
     @Override
-    public void start() {
+    public void run(ApplicationArguments args) {
         if (!telegram.isConfigured()) {
             log.warn("TELEGRAM_BOT_TOKEN is empty; long polling is disabled");
             return;
@@ -68,25 +73,14 @@ public class TelegramLongPollingRunner implements SmartLifecycle {
         log.info("Telegram long polling stopped");
     }
 
-    @Override
+    @PreDestroy
     public void stop() {
         running.set(false);
         Thread thread = pollingThread;
         if (thread != null) thread.interrupt();
     }
 
-    @Override
     public boolean isRunning() {
         return running.get();
-    }
-
-    @Override
-    public boolean isAutoStartup() {
-        return true;
-    }
-
-    @Override
-    public int getPhase() {
-        return Integer.MAX_VALUE;
     }
 }

@@ -6,7 +6,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -18,7 +17,8 @@ public class MarketplaceService {
     private final TelegramApiClient telegram;
     private final RedlineProperties properties;
 
-    public MarketplaceService(JdbcTemplate jdbc, TelegramApiClient telegram, RedlineProperties properties) {
+    public MarketplaceService(JdbcTemplate jdbc, TelegramApiClient telegram,
+                              RedlineProperties properties) {
         this.jdbc = jdbc;
         this.telegram = telegram;
         this.properties = properties;
@@ -27,14 +27,19 @@ public class MarketplaceService {
     @Transactional
     public void upsertUser(TelegramUser user) {
         jdbc.update("""
-                INSERT INTO users (telegram_id, username, first_name, last_name)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (
+                  telegram_id, username, first_name, last_name,
+                  bot_commission_percent, debt_limit_kopecks
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (telegram_id) DO UPDATE SET
                   username = EXCLUDED.username,
                   first_name = EXCLUDED.first_name,
                   last_name = EXCLUDED.last_name,
-                  updated_at = now()
-                """, user.id(), user.username(), user.firstName(), user.lastName());
+                  updated_at = CURRENT_TIMESTAMP
+                """, user.id(), user.username(), user.firstName(), user.lastName(),
+                properties.marketplace().botCommissionPercent(),
+                properties.marketplace().defaultDebtLimitKopecks());
     }
 
     @Transactional
@@ -47,7 +52,7 @@ public class MarketplaceService {
                   title = EXCLUDED.title,
                   owner_telegram_id = EXCLUDED.owner_telegram_id,
                   shop_thread_id = EXCLUDED.shop_thread_id,
-                  active = true
+                  active = 1
                 """, groupId, title, ownerTelegramId, shopThreadId);
     }
 
@@ -55,8 +60,8 @@ public class MarketplaceService {
         return jdbc.queryForList("""
                 SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
                        p.seller_price_kopecks,
-                       ROUND(p.seller_price_kopecks *
-                         (1 + s.bot_commission_percent / 100 + g.commission_percent / 100))::bigint
+                       CAST(ROUND(p.seller_price_kopecks *
+                         (1 + s.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, st.name AS store_name,
                        COALESCE(AVG(r.rating), 0) AS rating,
@@ -70,8 +75,8 @@ public class MarketplaceService {
                 LEFT JOIN reviews r ON r.product_id = p.id
                 LEFT JOIN group_buys gb ON gb.product_id = p.id
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
-                WHERE g.telegram_group_id = ? AND p.active = true
-                  AND s.globally_banned = false
+                WHERE g.telegram_group_id = ? AND p.active = 1
+                  AND s.globally_banned = 0
                   AND NOT EXISTS (
                     SELECT 1 FROM group_seller_bans b
                     WHERE b.group_id = g.id AND b.seller_telegram_id = st.seller_telegram_id
@@ -92,7 +97,7 @@ public class MarketplaceService {
                 INSERT INTO products
                   (store_id, group_id, title, description, category, stock, seller_price_kopecks,
                    kind, image_urls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?::product_kind, ?::jsonb)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """, Long.class, storeId, input.groupId(), input.title(), input.description(),
                 input.category(), input.stock(), input.sellerPriceKopecks(), input.kind(),
@@ -102,7 +107,7 @@ public class MarketplaceService {
                     INSERT INTO group_buys (product_id, target_count, collection_deadline)
                     VALUES (?, ?, ?)
                     """, productId, input.targetCount(),
-                    Timestamp.from(Instant.now().plus(input.collectionDays(), ChronoUnit.DAYS)));
+                    Instant.now().plus(input.collectionDays(), ChronoUnit.DAYS).toString());
         }
         publishProduct(productId);
         return productId;
@@ -119,7 +124,7 @@ public class MarketplaceService {
                   description = EXCLUDED.description,
                   payment_phone = EXCLUDED.payment_phone,
                   payment_card = EXCLUDED.payment_card,
-                  active = true
+                  active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
                 input.description(), input.paymentPhone(), input.paymentCard());
@@ -131,7 +136,7 @@ public class MarketplaceService {
         Map<String, Object> groupBuy = jdbc.queryForMap("""
                 SELECT gb.target_count, gb.status, p.stock
                 FROM group_buys gb JOIN products p ON p.id = gb.product_id
-                WHERE gb.id = ? FOR UPDATE
+                WHERE gb.id = ?
                 """, groupBuyId);
         if (!"COLLECTING".equals(groupBuy.get("status"))) {
             throw new IllegalStateException("Group buy is no longer collecting reservations");
@@ -151,7 +156,8 @@ public class MarketplaceService {
         );
         if (reached) {
             jdbc.update("""
-                    UPDATE group_buys SET status = 'PRICE_CONFIRMATION', updated_at = now()
+                    UPDATE group_buys SET status = 'PRICE_CONFIRMATION',
+                      updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND status = 'COLLECTING'
                     """, groupBuyId);
             notifyGroupBuySeller(groupBuyId,
@@ -167,9 +173,9 @@ public class MarketplaceService {
         jdbc.update("""
                 UPDATE group_buys
                 SET status = 'AWAITING_PAYMENT', final_price_kopecks = ?,
-                    payment_deadline = ?, updated_at = now()
+                    payment_deadline = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'PRICE_CONFIRMATION'
-                """, finalPriceKopecks, Timestamp.from(deadline), groupBuyId);
+                """, finalPriceKopecks, deadline.toString(), groupBuyId);
         List<Long> buyers = participantIds(groupBuyId);
         buyers.forEach(id -> telegram.sendMessage(id, """
                 <b>Закупка собрана!</b>
@@ -181,7 +187,8 @@ public class MarketplaceService {
     @Transactional
     public void markGroupBuyPaid(long groupBuyId, long buyerTelegramId) {
         int updated = jdbc.update("""
-                UPDATE group_buy_reservations SET status = 'PAID', paid_at = now()
+                UPDATE group_buy_reservations SET status = 'PAID',
+                  paid_at = CURRENT_TIMESTAMP
                 WHERE group_buy_id = ? AND buyer_telegram_id = ?
                   AND status IN ('RESERVED', 'PAYMENT_REQUESTED')
                 """, groupBuyId, buyerTelegramId);
@@ -200,7 +207,8 @@ public class MarketplaceService {
             throw new IllegalStateException("Not all participants are marked as paid");
         }
         jdbc.update("""
-                UPDATE group_buys SET status = 'FORMED', formed_at = now(), updated_at = now()
+                UPDATE group_buys SET status = 'FORMED',
+                  formed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'AWAITING_PAYMENT'
                 """, groupBuyId);
         participantIds(groupBuyId).forEach(id -> telegram.sendMessage(id,
@@ -213,9 +221,9 @@ public class MarketplaceService {
         assertGroupBuySeller(groupBuyId, sellerTelegramId);
         jdbc.update("""
                 UPDATE group_buys SET status = 'IN_DELIVERY', delivery_from = ?,
-                  delivery_to = ?, delivery_note = ?, updated_at = now()
+                  delivery_to = ?, delivery_note = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status IN ('FORMED', 'IN_DELIVERY')
-                """, Timestamp.from(from), Timestamp.from(to), note, groupBuyId);
+                """, from.toString(), to.toString(), note, groupBuyId);
         participantIds(groupBuyId).forEach(id -> telegram.sendMessage(id, """
                 <b>Новый ориентир поставки</b>
                 %s — %s
@@ -233,7 +241,7 @@ public class MarketplaceService {
                 JOIN stores st ON st.id = p.store_id
                 JOIN users u ON u.telegram_id = st.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
-                WHERE p.id = ? FOR UPDATE
+                WHERE p.id = ?
                 """, productId);
         long sellerId = ((Number) product.get("seller_telegram_id")).longValue();
         long groupId = ((Number) product.get("group_id")).longValue();
@@ -261,7 +269,7 @@ public class MarketplaceService {
     public void advanceOrder(long orderId, long actorTelegramId, String targetStatus) {
         Map<String, Object> order = jdbc.queryForMap("""
                 SELECT buyer_telegram_id, seller_telegram_id, status, commission_kopecks
-                FROM orders WHERE id = ? FOR UPDATE
+                FROM orders WHERE id = ?
                 """, orderId);
         String current = String.valueOf(order.get("status"));
         long buyer = ((Number) order.get("buyer_telegram_id")).longValue();
@@ -273,7 +281,7 @@ public class MarketplaceService {
             default -> false;
         };
         if (!valid) throw new IllegalStateException("Invalid order status transition");
-        jdbc.update("UPDATE orders SET status = ?::order_status, updated_at = now() WHERE id = ?",
+        jdbc.update("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 targetStatus, orderId);
         if ("COMPLETED".equals(targetStatus)) {
             long commission = ((Number) order.get("commission_kopecks")).longValue();
@@ -289,7 +297,7 @@ public class MarketplaceService {
     public void repayDebt(long sellerTelegramId, long amountKopecks, long adminTelegramId) {
         jdbc.update("""
                 UPDATE users SET commission_debt_kopecks =
-                  GREATEST(0, commission_debt_kopecks - ?)
+                  MAX(0, commission_debt_kopecks - ?)
                 WHERE telegram_id = ?
                 """, amountKopecks, sellerTelegramId);
         jdbc.update("""
@@ -343,8 +351,8 @@ public class MarketplaceService {
     public void updateGlobalSettings(double botCommissionPercent, long debtLimitKopecks) {
         jdbc.update("""
                 UPDATE platform_settings SET bot_commission_percent = ?,
-                  default_debt_limit_kopecks = ?, updated_at = now()
-                WHERE singleton = TRUE
+                  default_debt_limit_kopecks = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE singleton = 1
                 """, botCommissionPercent, debtLimitKopecks);
         jdbc.update("""
                 UPDATE users SET bot_commission_percent = ?, debt_limit_kopecks = ?
@@ -373,8 +381,8 @@ public class MarketplaceService {
                 """, groupId, sellerId);
         long debt = ((Number) seller.get("commission_debt_kopecks")).longValue();
         long limit = ((Number) seller.get("debt_limit_kopecks")).longValue();
-        if (Boolean.TRUE.equals(seller.get("globally_banned")) ||
-                Boolean.TRUE.equals(seller.get("group_banned")) || debt >= limit) {
+        if (asBoolean(seller.get("globally_banned")) ||
+                asBoolean(seller.get("group_banned")) || debt >= limit) {
             throw new IllegalStateException("Seller is temporarily not accepting orders");
         }
     }
@@ -414,7 +422,7 @@ public class MarketplaceService {
         long limit = ((Number) state.get("debt_limit_kopecks")).longValue();
         boolean shouldBlock = MarketplaceRules.debtBlocksSeller(debt, limit);
         jdbc.update("UPDATE users SET seller_blocked = ? WHERE telegram_id = ?", shouldBlock, sellerId);
-        if (shouldBlock && !Boolean.TRUE.equals(state.get("seller_blocked"))) {
+        if (shouldBlock && !asBoolean(state.get("seller_blocked"))) {
             telegram.sendMessage(sellerId, """
                     <b>Лимит задолженности превышен.</b>
                     Публикация объявлений и приём заказов приостановлены до оплаты комиссии.
@@ -425,10 +433,10 @@ public class MarketplaceService {
     private void publishProduct(long productId) {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT g.telegram_group_id, g.shop_thread_id, p.title, p.description, p.stock,
-                       ROUND(p.seller_price_kopecks *
-                         (1 + u.bot_commission_percent / 100 + g.commission_percent / 100))::bigint
+                       CAST(ROUND(p.seller_price_kopecks *
+                         (1 + u.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
-                       p.image_urls #>> '{0}' AS image_url
+                       json_extract(p.image_urls, '$[0]') AS image_url
                 FROM products p
                 JOIN stores s ON s.id = p.store_id
                 JOIN users u ON u.telegram_id = s.seller_telegram_id
@@ -447,6 +455,12 @@ public class MarketplaceService {
                 ((Number) product.get("stock")).intValue(),
                 String.valueOf(image)
         );
+    }
+
+    private static boolean asBoolean(Object value) {
+        if (value instanceof Boolean booleanValue) return booleanValue;
+        if (value instanceof Number numberValue) return numberValue.intValue() != 0;
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
     public record NewProduct(long groupId, String title, String description, String category,

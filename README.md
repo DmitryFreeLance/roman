@@ -2,232 +2,220 @@
 
 Telegram-бот и Mini App для мультигруппового автомобильного маркетплейса.
 
-- Mini App: `https://poznaysebya.site/redlineclub`
-- Bot API через nginx: `https://poznaysebya.site/redlineclub-api/`
+- Mini App: `https://poznaysebya.site/redlineclub/`
+- API: `https://poznaysebya.site/redlineclub-api/`
 - Telegram: long polling (`getUpdates`), без webhook
-- Backend: Java 21, Spring Boot, PostgreSQL, Flyway
+- Backend: Java 21, Spring Boot и SQLite
+- Развёртывание: один Docker-образ и один контейнер
 
-## 1. Подготовить Docker-сеть и PostgreSQL
+Все настройки передаются непосредственно через `-e` в `docker run`.
+Файлы `.env` и `--env-file` не используются.
 
-Все переменные передаются непосредственно через `-e`. Файлы `.env` и
-`--env-file` не используются.
+## 1. Собрать и запустить
 
-Создайте отдельную сеть и volume:
-
-```bash
-docker network create redline-net
-docker volume create redline-postgres-data
-```
-
-Запустите PostgreSQL. Обязательно замените пароль:
+Выполните из корня проекта, где находится `Dockerfile`:
 
 ```bash
-docker run -d \
-  --name redline-postgres \
-  --restart unless-stopped \
-  --network redline-net \
-  -e POSTGRES_DB='redline' \
-  -e POSTGRES_USER='redline' \
-  -e POSTGRES_PASSWORD='ЗАМЕНИТЕ_НА_СЛОЖНЫЙ_ПАРОЛЬ' \
-  -v redline-postgres-data:/var/lib/postgresql/data \
-  postgres:16-alpine
+docker volume create redline-bot-data
+docker build -t redline-bot:1.0 .
 ```
 
-Проверка:
-
-```bash
-docker exec redline-postgres pg_isready -U redline -d redline
-```
-
-## 2. Собрать и запустить Mini App
-
-Из корня проекта:
-
-```bash
-docker build -f Dockerfile.miniapp -t redline-miniapp:1.0 .
-```
-
-Контейнер доступен только локальному nginx:
-
-```bash
-docker run -d \
-  --name redline-miniapp \
-  --restart unless-stopped \
-  -p 127.0.0.1:13000:3000 \
-  -e NODE_ENV='production' \
-  redline-miniapp:1.0
-```
-
-Проверка до настройки nginx:
-
-```bash
-curl -I http://127.0.0.1:13000/redlineclub/
-```
-
-## 3. Собрать и запустить бота
-
-Сборка:
-
-```bash
-docker build -t redline-bot:1.0 ./bot
-```
-
-Запуск. Замените токен, Telegram ID и пароль БД:
+Перед запуском получите новый токен через BotFather. Не добавляйте токен в
+Dockerfile, Git или текстовые файлы.
 
 ```bash
 docker run -d \
   --name redline-bot \
   --restart unless-stopped \
-  --network redline-net \
   -p 127.0.0.1:18080:8080 \
+  -v redline-bot-data:/data \
   -e PORT='8080' \
-  -e TELEGRAM_BOT_TOKEN='123456789:ТОКЕН_ОТ_BOTFATHER' \
+  -e TELEGRAM_BOT_TOKEN='НОВЫЙ_ТОКЕН_ОТ_BOTFATHER' \
   -e TELEGRAM_POLLING_TIMEOUT_SECONDS='50' \
   -e MINI_APP_URL='https://poznaysebya.site/redlineclub/' \
-  -e SUPER_ADMIN_TELEGRAM_ID='ВАШ_TELEGRAM_ID' \
+  -e SUPER_ADMIN_TELEGRAM_ID='726773708' \
   -e BOT_COMMISSION_PERCENT='5.0' \
   -e DEBT_LIMIT_KOPECKS='50000' \
-  -e DATABASE_URL='jdbc:postgresql://redline-postgres:5432/redline' \
-  -e DATABASE_USER='redline' \
-  -e DATABASE_PASSWORD='ТОТ_ЖЕ_СЛОЖНЫЙ_ПАРОЛЬ' \
+  -e DATABASE_URL='jdbc:sqlite:/data/redline.db' \
   redline-bot:1.0
 ```
+
+Контейнер одновременно запускает:
+
+- Mini App на внутреннем порту `3000`;
+- Spring Boot API и long polling на внутреннем порту `18081`;
+- единый внутренний шлюз на порту `8080`.
+
+Наружу публикуется только `127.0.0.1:18080`.
+Отдельный контейнер Mini App, PostgreSQL и Docker-сеть не нужны.
 
 `DEBT_LIMIT_KOPECKS='50000'` означает 500 рублей.
 
 Проверка:
 
 ```bash
-docker logs --tail 100 redline-bot
+docker logs --tail 150 redline-bot
 curl -s http://127.0.0.1:18080/actuator/health
+curl -I http://127.0.0.1:18080/redlineclub/
+docker exec redline-bot ls -lh /data/redline.db
 ```
 
-При старте бот выполняет `deleteWebhook`, а затем постоянно вызывает
-`getUpdates` с long polling. Публичный URL для получения обновлений Telegram
-не нужен. Запускайте только один экземпляр контейнера `redline-bot`: Telegram
-не допускает параллельный `getUpdates` для одного токена.
+При старте приложение создаёт SQLite-таблицы, включает foreign keys и WAL,
+удаляет прежний webhook и запускает `getUpdates`.
 
-## 4. Точно добавить `/redlineclub` в nginx
+Запускайте только один экземпляр контейнера с данным токеном: Telegram не
+разрешает параллельный long polling для одного бота.
 
-### 4.1. Найти конфиг именно нужного домена
+## 2. Полный nginx-конфиг
 
-Не создавайте новый `server` с тем же доменом. Сначала найдите существующий:
+Сначала перенесите резервную копию за пределы `sites-enabled`:
 
 ```bash
-sudo grep -Rns \
-  'server_name.*poznaysebya\.site' \
-  /etc/nginx/sites-enabled /etc/nginx/conf.d
+sudo mv /etc/nginx/sites-enabled/poznaysebya.site.backup \
+  /root/poznaysebya.site.backup
 ```
 
-Команда покажет точный файл, например:
+Файл `/etc/nginx/sites-enabled/poznaysebya.site`:
 
-```text
-/etc/nginx/sites-enabled/poznaysebya.site.conf:12: server_name poznaysebya.site;
+```nginx
+server {
+    server_name poznaysebya.site www.poznaysebya.site;
+
+    location = /ascendlab {
+        return 301 /ascendlab/;
+    }
+
+    location /ascendlab/ {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_buffering off;
+        proxy_read_timeout 300;
+        client_max_body_size 24m;
+    }
+
+    location = /redlineclub {
+        return 308 /redlineclub/;
+    }
+
+    location ^~ /redlineclub/ {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location ^~ /redlineclub-api/ {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size 20m;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/poznaysebya.site/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/poznaysebya.site/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+}
+
+server {
+    if ($host = www.poznaysebya.site) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    if ($host = poznaysebya.site) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    listen 80;
+    listen [::]:80;
+    server_name poznaysebya.site www.poznaysebya.site;
+
+    return 404; # managed by Certbot
+}
 ```
 
-Проверьте, что это HTTPS-блок с `listen 443 ssl`:
-
-```bash
-sudo nginx -T | less
-```
-
-В выводе найдите `server_name poznaysebya.site`. Изменять нужно только этот
-`server { ... }`. Блок `/ascendlab` оставьте как есть.
-
-Если найденный файл является символической ссылкой из `sites-enabled`, узнайте
-реальный файл и дальше редактируйте его:
-
-```bash
-sudo readlink -f /etc/nginx/sites-enabled/poznaysebya.site.conf
-```
-
-### 4.2. Сделать резервную копию
-
-Подставьте путь, найденный на предыдущем шаге:
-
-```bash
-sudo cp /etc/nginx/sites-enabled/poznaysebya.site.conf \
-  /etc/nginx/sites-enabled/poznaysebya.site.conf.backup
-```
-
-### 4.3. Добавить три location
-
-Откройте найденный файл:
-
-```bash
-sudo nano /etc/nginx/sites-enabled/poznaysebya.site.conf
-```
-
-Вставьте содержимое
-`deploy/nginx-redlineclub.conf.example` **внутрь существующего HTTPS
-`server { ... }`**, рядом с уже существующим `location /ascendlab/`.
-
-Ключевые правила:
-
-1. Не вставлять новый `server {}`.
-2. Не менять существующий `location /ascendlab/`.
-3. Для Mini App оставить
-   `proxy_pass http://127.0.0.1:13000;` **без** `/` в конце.
-4. Для API оставить
-   `proxy_pass http://127.0.0.1:18080/;` **с** `/` в конце.
-
-### 4.4. Проверить и применить
+Проверить и применить:
 
 ```bash
 sudo nginx -t
-```
-
-Если вывод содержит `syntax is ok` и `test is successful`:
-
-```bash
 sudo systemctl reload nginx
 ```
 
-Если проверка не прошла — не перезагружайте nginx, восстановите backup.
+Не выполняйте `reload`, если `nginx -t` завершился с ошибкой.
 
-### 4.5. Проверить снаружи
+Проверка снаружи:
 
 ```bash
-curl -I https://poznaysebya.site/redlineclub
 curl -I https://poznaysebya.site/redlineclub/
 curl -s https://poznaysebya.site/redlineclub-api/actuator/health
 ```
 
-Ожидается:
+## 3. Настроить BotFather
 
-- первый запрос: `308` на `/redlineclub/`;
-- второй: `200`;
-- health: JSON со статусом `UP`.
+1. `/revoke` — отозвать ранее опубликованный токен.
+2. `/setdomain` → выбрать бота → `poznaysebya.site`.
+3. `/setmenubutton` → выбрать бота.
+4. Текст: `Открыть REDLINE CLUB`.
+5. URL: `https://poznaysebya.site/redlineclub/`.
 
-## 5. Настроить BotFather
+Webhook настраивать не нужно.
 
-В диалоге с `@BotFather`:
-
-1. `/setdomain` → выбрать бота → `poznaysebya.site`.
-2. `/setmenubutton` → выбрать бота.
-3. Текст кнопки: `Открыть REDLINE CLUB`.
-4. URL: `https://poznaysebya.site/redlineclub/`.
-
-Webhook настраивать не нужно. Если он был установлен раньше, бот удалит его
-сам при первом запуске long polling.
-
-## 6. Обновление контейнеров
-
-После получения новой версии кода:
+## 4. Обновление без потери SQLite
 
 ```bash
-docker rm -f redline-miniapp redline-bot
-docker build -f Dockerfile.miniapp -t redline-miniapp:1.1 .
-docker build -t redline-bot:1.1 ./bot
+docker rm -f redline-bot
+docker build -t redline-bot:1.1 .
 ```
 
-Затем повторите команды `docker run` выше с новыми тегами. PostgreSQL удалять
-не нужно: данные остаются в `redline-postgres-data`.
+Повторите `docker run` с новым тегом. Не удаляйте volume
+`redline-bot-data`: в нём находится база.
+
+Резервная копия:
+
+```bash
+docker run --rm \
+  -v redline-bot-data:/data:ro \
+  -v "$PWD":/backup \
+  alpine:3.21 \
+  cp /data/redline.db /backup/redline-$(date +%F-%H%M).db
+```
 
 ## API и безопасность
 
-Mini App передаёт оригинальную строку `Telegram.WebApp.initData` в заголовке
+Mini App передаёт `Telegram.WebApp.initData` в заголовке
 `X-Telegram-Init-Data`. Backend проверяет HMAC-подпись и срок действия.
 
 Оплата товаров и комиссий выполняется напрямую между участниками. Площадка
-хранит только статусы сделок и бухгалтерский счётчик комиссионного долга.
+хранит статусы сделок и бухгалтерский счётчик комиссионного долга.

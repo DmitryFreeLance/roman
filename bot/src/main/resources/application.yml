@@ -6,13 +6,13 @@ spring:
   application:
     name: redline-telegram-bot
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/redline}
-    username: ${DATABASE_USER:redline}
-    password: ${DATABASE_PASSWORD:redline}
+    url: ${DATABASE_URL:jdbc:sqlite:/data/redline.db}
+    driver-class-name: org.sqlite.JDBC
     hikari:
-      maximum-pool-size: 10
-  flyway:
-    enabled: true
+      maximum-pool-size: 1
+      minimum-idle: 1
+      connection-init-sql: PRAGMA foreign_keys=ON
+      connection-timeout: 30000
   jackson:
     default-property-inclusion: non_null
 
