@@ -9,13 +9,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
 public class MarketplaceService {
     private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
+    private static final DateTimeFormatter TELEGRAM_TIME =
+            DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'", Locale.forLanguageTag("ru"))
+                    .withZone(ZoneOffset.UTC);
     private final JdbcTemplate jdbc;
     private final TelegramApiClient telegram;
     private final long superAdminTelegramId;
@@ -397,14 +403,24 @@ public class MarketplaceService {
     @Transactional
     public ReservationResult reserve(long groupBuyId, long buyerTelegramId, String phone) {
         Map<String, Object> groupBuy = jdbc.queryForMap("""
-                SELECT gb.target_count, gb.status, p.stock
-                FROM group_buys gb JOIN products p ON p.id = gb.product_id
+                SELECT gb.target_count, gb.status, p.stock, p.group_id,
+                       p.active, p.deleted, st.seller_telegram_id
+                FROM group_buys gb
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
                 WHERE gb.id = ?
                 """, groupBuyId);
         if (!"COLLECTING".equals(groupBuy.get("status"))) {
             throw new IllegalStateException("Group buy is no longer collecting reservations");
         }
-        jdbc.update("""
+        if (!asBoolean(groupBuy.get("active")) || asBoolean(groupBuy.get("deleted"))) {
+            throw new IllegalStateException("Product is not available");
+        }
+        assertSellerCanTrade(
+                ((Number) groupBuy.get("seller_telegram_id")).longValue(),
+                ((Number) groupBuy.get("group_id")).longValue()
+        );
+        int inserted = jdbc.update("""
                 INSERT INTO group_buy_reservations (group_buy_id, buyer_telegram_id, contact_phone)
                 VALUES (?, ?, ?)
                 ON CONFLICT (group_buy_id, buyer_telegram_id) DO NOTHING
@@ -417,6 +433,17 @@ public class MarketplaceService {
         boolean reached = MarketplaceRules.groupBuyThresholdReached(
                 reserved == null ? 0 : reserved, target
         );
+        if (inserted > 0) {
+            notifyUser(buyerTelegramId, """
+                    <b>Бронь подтверждена</b>
+                    Ваше место в групповой закупке сохранено.
+
+                    %s
+
+                    Следующий шаг: дождитесь набора участников. Когда продавец
+                    подтвердит цену, бот пришлёт сумму и срок оплаты.
+                    """.formatted(groupBuySummary(groupBuyId)));
+        }
         if (reached) {
             int activated = jdbc.update("""
                     UPDATE group_buys SET status = 'PRICE_CONFIRMATION',
@@ -425,13 +452,20 @@ public class MarketplaceService {
                     """, groupBuyId);
             if (activated > 0) {
                 notifyGroupBuySeller(groupBuyId,
-                        "Набралось достаточно участников. Обновите актуальную цену "
-                                + "в разделе «Заказы клиентов» и запустите оплату.");
+                        """
+                        <b>Группа собрана — подтвердите цену</b>
+                        Набралось достаточно участников.
+
+                        Следующий шаг: откройте «Заказы клиентов», укажите актуальную
+                        цену и запустите этап оплаты.
+                        """);
                 participantIds(groupBuyId).forEach(id -> notifyUser(id, """
                         <b>Группа для закупки собрана!</b>
-                        Продавец уточняет актуальную цену. Скоро придёт уведомление
-                        с суммой, реквизитами и сроком оплаты.
-                        """));
+                        %s
+
+                        Продавец уточняет актуальную цену. Следующее уведомление
+                        будет содержать сумму, реквизиты и точный срок оплаты.
+                        """.formatted(groupBuySummary(groupBuyId))));
             }
         }
         return new ReservationResult(reserved == null ? 0 : reserved, target, reached);
@@ -477,10 +511,12 @@ public class MarketplaceService {
                 """, groupBuyId);
         List<Long> buyers = participantIds(groupBuyId);
         buyers.forEach(id -> notifyUser(id, """
-                <b>Закупка собрана!</b>
-                Актуальная цена: <b>%d ₽</b>.
-                Оплатите продавцу до %s и нажмите «Я оплатил» в разделе покупок.
-                """.formatted(buyerPriceKopecks / 100, deadline)));
+                <b>Открыта оплата по закупке</b>
+                %s
+
+                Следующий шаг: переведите указанную сумму по реквизитам продавца
+                и нажмите «Я оплатил» в разделе «Мои покупки».
+                """.formatted(groupBuySummary(groupBuyId))));
     }
 
     @Transactional
@@ -492,7 +528,13 @@ public class MarketplaceService {
                   AND status IN ('RESERVED', 'PAYMENT_REQUESTED')
                 """, groupBuyId, buyerTelegramId);
         if (updated == 0) throw new IllegalStateException("Reservation is not payable");
-        notifyGroupBuySeller(groupBuyId, "Участник отметил оплату. Проверьте поступление.");
+        notifyGroupBuySeller(groupBuyId, """
+                <b>Участник отметил оплату</b>
+                Покупатель: %s
+
+                Следующий шаг: проверьте фактическое поступление денег. Когда оплату
+                отметят все участники, подтвердите формирование закупки.
+                """.formatted(userLabel(buyerTelegramId)));
     }
 
     @Transactional
@@ -510,8 +552,13 @@ public class MarketplaceService {
                   formed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'AWAITING_PAYMENT'
                 """, groupBuyId);
-        participantIds(groupBuyId).forEach(id -> notifyUser(id,
-                "<b>Закупка сформирована.</b>\nОплата подтверждена. Ожидайте информацию о поставке."));
+        participantIds(groupBuyId).forEach(id -> notifyUser(id, """
+                <b>Закупка сформирована</b>
+                %s
+
+                Продавец подтвердил оплаты участников. Следующий шаг: ожидайте
+                отдельное уведомление с датами и комментарием по поставке.
+                """.formatted(groupBuySummary(groupBuyId))));
     }
 
     @Transactional
@@ -525,9 +572,18 @@ public class MarketplaceService {
                 """, from.toString(), to.toString(), note, groupBuyId);
         participantIds(groupBuyId).forEach(id -> notifyUser(id, """
                 <b>Новый ориентир поставки</b>
-                %s — %s
                 %s
-                """.formatted(from, to, note)));
+
+                Период поставки: <b>%s — %s</b>
+                Комментарий продавца: %s
+
+                Следите за изменениями в разделе «Мои покупки».
+                """.formatted(
+                groupBuySummary(groupBuyId),
+                TELEGRAM_TIME.format(from),
+                TELEGRAM_TIME.format(to),
+                note == null || note.isBlank() ? "без дополнительного комментария" : escapeHtml(note)
+        )));
     }
 
     @Transactional
@@ -566,7 +622,28 @@ public class MarketplaceService {
                 """, Long.class, productId, buyerTelegramId, sellerId, groupId,
                 sellerPrice, buyerPrice, commission);
         jdbc.update("UPDATE products SET stock = stock - 1 WHERE id = ?", productId);
-        notifyUser(sellerId, "<b>Новый заказ.</b>\nПокупатель ожидает реквизиты.");
+        Map<String, Object> order = orderNotificationDetails(orderId);
+        notifyUser(sellerId, """
+                <b>Новый заказ</b>
+                %s
+
+                К получению продавцом: <b>%s</b>
+                Комиссия после завершения: <b>%s</b>
+
+                Следующий шаг: убедитесь, что в магазине указаны актуальные
+                реквизиты, и ожидайте отметку покупателя об оплате.
+                """.formatted(
+                orderSummary(order),
+                formatMoney(order.get("seller_price_kopecks")),
+                formatMoney(order.get("commission_kopecks"))
+        ));
+        notifyUser(buyerTelegramId, """
+                <b>Заказ создан</b>
+                %s
+
+                Следующий шаг: откройте «Мои покупки», проверьте реквизиты продавца,
+                переведите сумму и нажмите «Я оплатил».
+                """.formatted(orderSummary(order)));
         return orderId;
     }
 
@@ -595,6 +672,12 @@ public class MarketplaceService {
                 JOIN telegram_groups g ON g.id = o.group_id
                 LEFT JOIN reviews review ON review.order_id = o.id
                 WHERE o.buyer_telegram_id = ? AND g.telegram_group_id = ?
+                  AND seller.globally_banned = 0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM group_seller_bans ban
+                    WHERE ban.group_id = g.id
+                      AND ban.seller_telegram_id = o.seller_telegram_id
+                  )
                 ORDER BY o.created_at DESC
                 """, buyerTelegramId, telegramGroupId);
     }
@@ -665,6 +748,12 @@ public class MarketplaceService {
                 JOIN telegram_groups g ON g.id = p.group_id
                 WHERE r.buyer_telegram_id = ? AND g.telegram_group_id = ?
                   AND r.status <> 'CANCELLED'
+                  AND seller.globally_banned = 0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM group_seller_bans ban
+                    WHERE ban.group_id = g.id
+                      AND ban.seller_telegram_id = st.seller_telegram_id
+                  )
                 ORDER BY r.created_at DESC
                 """, buyerTelegramId, telegramGroupId);
     }
@@ -745,20 +834,42 @@ public class MarketplaceService {
         if (updated == 0) {
             throw new IllegalStateException("Order status was already changed");
         }
+        Map<String, Object> details = orderNotificationDetails(orderId);
         if ("CANCELLED".equals(targetStatus)) {
             jdbc.update("UPDATE products SET stock = stock + 1 WHERE id = ?",
                     ((Number) order.get("product_id")).longValue());
             long recipient = actorTelegramId == buyer ? seller : buyer;
-            notifyUser(recipient, "<b>Заказ отменён.</b>\nЗаказ #" + orderId
-                    + " отменён второй стороной.");
+            notifyUser(recipient, """
+                    <b>Заказ отменён</b>
+                    %s
+
+                    Заказ отменила другая сторона. Товар возвращён в остаток.
+                    Если деньги уже были переведены, свяжитесь со второй стороной
+                    и при необходимости отправьте жалобу через «Мои покупки».
+                    """.formatted(orderSummary(details)));
             return;
         }
         if ("PAID".equals(targetStatus)) {
-            notifyUser(seller,
-                    "<b>Покупатель отметил оплату.</b>\nПроверьте поступление и отправьте товар.");
+            notifyUser(seller, """
+                    <b>Покупатель отметил оплату</b>
+                    %s
+
+                    Покупатель сообщил о переводе <b>%s</b>.
+                    Следующий шаг: проверьте фактическое поступление, затем отправьте
+                    товар или выполните услугу и отметьте это в «Заказах клиентов».
+                    """.formatted(
+                    orderSummary(details),
+                    formatMoney(details.get("buyer_price_kopecks"))
+            ));
         } else if ("SHIPPED".equals(targetStatus)) {
-            notifyUser(buyer,
-                    "<b>Продавец отметил товар отправленным.</b>\nПосле получения подтвердите заказ.");
+            notifyUser(buyer, """
+                    <b>Продавец отметил заказ отправленным</b>
+                    %s
+
+                    Следующий шаг: после фактического получения и проверки товара
+                    нажмите «Подтвердить получение» в разделе «Мои покупки».
+                    Если возникла проблема, отправьте жалобу из карточки заказа.
+                    """.formatted(orderSummary(details)));
         }
         if ("COMPLETED".equals(targetStatus)) {
             long commission = ((Number) order.get("commission_kopecks")).longValue();
@@ -772,8 +883,23 @@ public class MarketplaceService {
                     VALUES (?, ?, ?, 'ACCRUAL')
                     """, seller, orderId, commission);
             refreshSellerBlock(seller);
-            notifyUser(seller,
-                    "<b>Заказ завершён.</b>\nКомиссия начислена в счётчик задолженности.");
+            notifyUser(seller, """
+                    <b>Заказ завершён</b>
+                    %s
+
+                    Покупатель подтвердил получение. Начисленная комиссия:
+                    <b>%s</b>. Она добавлена к задолженности продавца.
+                    """.formatted(
+                    orderSummary(details),
+                    formatMoney(details.get("commission_kopecks"))
+            ));
+            notifyUser(buyer, """
+                    <b>Заказ завершён</b>
+                    %s
+
+                    Получение подтверждено. Теперь вы можете оценить продавца
+                    в карточке заказа — оценка влияет на рейтинг товара и магазина.
+                    """.formatted(orderSummary(details)));
         }
     }
 
@@ -790,6 +916,22 @@ public class MarketplaceService {
                 VALUES (?, ?, 'REPAYMENT', ?)
                 """, sellerTelegramId, -amountKopecks, adminTelegramId);
         refreshSellerBlock(sellerTelegramId);
+        Long remaining = jdbc.queryForObject("""
+                SELECT commission_debt_kopecks FROM users WHERE telegram_id = ?
+                """, Long.class, sellerTelegramId);
+        notifyUser(sellerTelegramId, """
+                <b>Платёж комиссии учтён</b>
+                Зачислено: <b>%s</b>
+                Остаток задолженности: <b>%s</b>
+                Операцию зафиксировал администратор: %s
+
+                Если лимит задолженности больше не превышен, приём новых заказов
+                восстановлен автоматически.
+                """.formatted(
+                formatMoney(amountKopecks),
+                formatMoney(remaining == null ? 0 : remaining),
+                userLabel(adminTelegramId)
+        ));
     }
 
     public List<Map<String, Object>> groupBuyBuyers(long groupBuyId, long sellerTelegramId) {
@@ -850,10 +992,37 @@ public class MarketplaceService {
                 Integer.class, superAdminTelegramId
         );
         if (adminExists != null && adminExists > 0) {
-            notifyUser(superAdminTelegramId,
-                    "<b>Новая жалоба на продавца</b>\nЗаказ #" + orderId
-                            + ". Откройте раздел «Модерация».");
+            notifyUser(superAdminTelegramId, """
+                    <b>Новая жалоба на продавца</b>
+                    Жалоба: <b>#%s</b>
+                    Заявитель: %s
+                    Причина: %s
+
+                    %s
+
+                    Следующий шаг: откройте раздел «Модерация», проверьте сведения
+                    по сделке и выберите «Заблокировать» или «Отклонить».
+                    """.formatted(
+                    reportId,
+                    userLabel(reporterTelegramId),
+                    escapeHtml(abbreviate(normalized, 1_000)),
+                    orderSummary(orderNotificationDetails(orderId))
+            ));
         }
+        notifyUser(reporterTelegramId, """
+                <b>Жалоба принята на модерацию</b>
+                Жалоба: <b>#%s</b>
+                Причина: %s
+
+                %s
+
+                Супер-администратор проверит сделку. Результат рассмотрения придёт
+                отдельным уведомлением.
+                """.formatted(
+                reportId,
+                escapeHtml(abbreviate(normalized, 1_000)),
+                orderSummary(orderNotificationDetails(orderId))
+        ));
         return reportId == null ? 0 : reportId;
     }
 
@@ -890,10 +1059,37 @@ public class MarketplaceService {
                 Integer.class, superAdminTelegramId
         );
         if (adminExists != null && adminExists > 0) {
-            notifyUser(superAdminTelegramId,
-                    "<b>Новая жалоба на продавца</b>\nГрупповая закупка #"
-                            + groupBuyId + ". Откройте раздел «Модерация».");
+            notifyUser(superAdminTelegramId, """
+                    <b>Новая жалоба на продавца</b>
+                    Жалоба: <b>#%s</b>
+                    Заявитель: %s
+                    Причина: %s
+
+                    %s
+
+                    Следующий шаг: откройте раздел «Модерация», проверьте сведения
+                    по закупке и выберите «Заблокировать» или «Отклонить».
+                    """.formatted(
+                    reportId,
+                    userLabel(reporterTelegramId),
+                    escapeHtml(abbreviate(normalized, 1_000)),
+                    groupBuySummary(groupBuyId)
+            ));
         }
+        notifyUser(reporterTelegramId, """
+                <b>Жалоба принята на модерацию</b>
+                Жалоба: <b>#%s</b>
+                Причина: %s
+
+                %s
+
+                Супер-администратор проверит закупку. Результат рассмотрения придёт
+                отдельным уведомлением.
+                """.formatted(
+                reportId,
+                escapeHtml(abbreviate(normalized, 1_000)),
+                groupBuySummary(groupBuyId)
+        ));
         return reportId == null ? 0 : reportId;
     }
 
@@ -928,6 +1124,38 @@ public class MarketplaceService {
         if (telegramId == superAdminTelegramId) {
             throw new IllegalArgumentException("Нельзя заблокировать супер-администратора");
         }
+        Map<String, Object> user = jdbc.queryForMap("""
+                SELECT u.telegram_id, u.username,
+                       COALESCE(NULLIF(u.display_name, ''),
+                         TRIM(u.first_name || ' ' || COALESCE(u.last_name, ''))) AS name,
+                       (SELECT COUNT(*) FROM products p
+                        JOIN stores st ON st.id = p.store_id
+                        WHERE st.seller_telegram_id = u.telegram_id
+                          AND p.deleted = 0) AS product_count,
+                       (SELECT COUNT(*) FROM orders o
+                        WHERE o.seller_telegram_id = u.telegram_id
+                          AND o.status <> 'CANCELLED') AS order_count,
+                       (SELECT COUNT(*) FROM group_buy_reservations r
+                        JOIN group_buys gb ON gb.id = r.group_buy_id
+                        JOIN products p ON p.id = gb.product_id
+                        JOIN stores st ON st.id = p.store_id
+                        WHERE st.seller_telegram_id = u.telegram_id
+                          AND r.status <> 'CANCELLED') AS reservation_count
+                FROM users u
+                WHERE u.telegram_id = ?
+                """, telegramId);
+        List<Long> affectedBuyers = jdbc.queryForList("""
+                SELECT buyer_telegram_id
+                FROM orders
+                WHERE seller_telegram_id = ? AND status <> 'CANCELLED'
+                UNION
+                SELECT r.buyer_telegram_id
+                FROM group_buy_reservations r
+                JOIN group_buys gb ON gb.id = r.group_buy_id
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                WHERE st.seller_telegram_id = ? AND r.status <> 'CANCELLED'
+                """, Long.class, telegramId, telegramId);
         int updated = jdbc.update("""
                 UPDATE users SET globally_banned = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ?
@@ -941,9 +1169,49 @@ public class MarketplaceService {
                     )
                     """, telegramId);
         }
+        String seller = userLabel(user, "");
         notifyUser(telegramId, banned
-                ? "<b>Аккаунт заблокирован.</b>\nОбратитесь к администратору REDLINE."
-                : "<b>Блокировка снята.</b>\nДоступ к REDLINE восстановлен.");
+                ? """
+                  <b>Аккаунт заблокирован модерацией</b>
+                  Профиль: %s
+                  Скрыто объявлений: <b>%s</b>
+                  Связанных заказов: <b>%s</b>
+                  Броней в закупках: <b>%s</b>
+
+                  Объявления больше не видны в каталоге, а связанные карточки
+                  скрыты из «Моих покупок» у покупателей. Создание и выполнение
+                  сделок недоступно.
+
+                  Для обжалования обратитесь к супер-администратору REDLINE.
+                  """.formatted(
+                        seller,
+                        user.get("product_count"),
+                        user.get("order_count"),
+                        user.get("reservation_count"))
+                : """
+                  <b>Глобальная блокировка снята</b>
+                  Профиль: %s
+
+                  Доступ к REDLINE восстановлен, связанные покупки снова доступны
+                  покупателям. Объявления, отключённые во время модерации, необходимо
+                  включить вручную в разделе «Мои объявления».
+                  """.formatted(seller));
+        affectedBuyers.forEach(buyerId -> notifyUser(buyerId, banned
+                ? """
+                  <b>Продавец заблокирован модерацией</b>
+                  Продавец: %s
+
+                  Его объявления и связанные заказы или брони скрыты из каталога
+                  и раздела «Мои покупки». Если вы уже перевели деньги, сохраните
+                  подтверждение платежа и обратитесь к супер-администратору REDLINE.
+                  """.formatted(seller)
+                : """
+                  <b>Блокировка продавца снята</b>
+                  Продавец: %s
+
+                  Связанные заказы и брони снова отображаются в «Моих покупках».
+                  Перед дальнейшими действиями проверьте актуальный статус сделки.
+                  """.formatted(seller)));
     }
 
     public List<Map<String, Object>> sellerReports() {
@@ -975,7 +1243,8 @@ public class MarketplaceService {
     @Transactional
     public void resolveSellerReport(long reportId, long adminTelegramId, String action) {
         Map<String, Object> report = jdbc.queryForMap("""
-                SELECT reported_telegram_id, status
+                SELECT reported_telegram_id, reporter_telegram_id, status,
+                       order_id, group_buy_id, reason
                 FROM seller_reports WHERE id = ?
                 """, reportId);
         if (!"PENDING".equals(String.valueOf(report.get("status")))) {
@@ -996,6 +1265,31 @@ public class MarketplaceService {
                   resolved_by_telegram_id = ?, resolved_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """, status, adminTelegramId, reportId);
+        long reporterId = ((Number) report.get("reporter_telegram_id")).longValue();
+        String subject = report.get("order_id") != null
+                ? orderSummary(orderNotificationDetails(
+                        ((Number) report.get("order_id")).longValue()))
+                : groupBuySummary(((Number) report.get("group_buy_id")).longValue());
+        notifyUser(reporterId, """
+                <b>Жалоба рассмотрена</b>
+                Жалоба: <b>#%s</b>
+                Решение: <b>%s</b>
+                Причина обращения: %s
+
+                %s
+
+                %s
+                """.formatted(
+                reportId,
+                "BANNED".equals(status)
+                        ? "продавец заблокирован"
+                        : "нарушение не подтверждено",
+                escapeHtml(abbreviate(report.get("reason"), 1_000)),
+                subject,
+                "BANNED".equals(status)
+                        ? "Объявления продавца и связанные карточки покупок скрыты."
+                        : "Если появятся новые обстоятельства, отправьте новую жалобу с подробностями."
+        ));
     }
 
     public List<Map<String, Object>> groups() {
@@ -1101,6 +1395,31 @@ public class MarketplaceService {
                 WHERE telegram_group_id = ? AND owner_telegram_id = ?
                 """, Long.class, telegramGroupId, ownerTelegramId);
         if (groupId == null) throw new IllegalArgumentException("Group owner access required");
+        String groupTitle = jdbc.queryForObject(
+                "SELECT title FROM telegram_groups WHERE id = ?",
+                String.class, groupId
+        );
+        Integer productCount = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM products p
+                JOIN stores st ON st.id = p.store_id
+                WHERE p.group_id = ? AND st.seller_telegram_id = ?
+                  AND p.deleted = 0
+                """, Integer.class, groupId, sellerTelegramId);
+        List<Long> affectedBuyers = jdbc.queryForList("""
+                SELECT o.buyer_telegram_id
+                FROM orders o
+                WHERE o.group_id = ? AND o.seller_telegram_id = ?
+                  AND o.status <> 'CANCELLED'
+                UNION
+                SELECT r.buyer_telegram_id
+                FROM group_buy_reservations r
+                JOIN group_buys gb ON gb.id = r.group_buy_id
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                WHERE p.group_id = ? AND st.seller_telegram_id = ?
+                  AND r.status <> 'CANCELLED'
+                """, Long.class,
+                groupId, sellerTelegramId, groupId, sellerTelegramId);
         if (banned) {
             jdbc.update("""
                     INSERT INTO group_seller_bans (group_id, seller_telegram_id, reason)
@@ -1120,6 +1439,41 @@ public class MarketplaceService {
                     WHERE group_id = ? AND seller_telegram_id = ?
                     """, groupId, sellerTelegramId);
         }
+        String seller = userLabel(sellerTelegramId);
+        notifyUser(sellerTelegramId, banned
+                ? """
+                  <b>Продажи в клубе приостановлены</b>
+                  Клуб: <b>%s</b>
+                  Скрыто объявлений: <b>%s</b>
+
+                  Владелец клуба ограничил продажи: объявления скрыты, а связанные
+                  карточки заказов и броней больше не показываются покупателям
+                  этого клуба. Для уточнения причины обратитесь к владельцу клуба.
+                  """.formatted(escapeHtml(groupTitle), productCount)
+                : """
+                  <b>Блокировка продавца в клубе снята</b>
+                  Клуб: <b>%s</b>
+
+                  Связанные покупки снова доступны участникам. Объявления,
+                  отключённые во время блокировки, включите вручную.
+                  """.formatted(escapeHtml(groupTitle)));
+        affectedBuyers.forEach(buyerId -> notifyUser(buyerId, banned
+                ? """
+                  <b>Продавец заблокирован в клубе</b>
+                  Клуб: <b>%s</b>
+                  Продавец: %s
+
+                  Связанные заказы и брони скрыты из «Моих покупок». Если деньги
+                  уже переведены, сохраните подтверждение и обратитесь к владельцу
+                  клуба или отправьте жалобу супер-администратору.
+                  """.formatted(escapeHtml(groupTitle), seller)
+                : """
+                  <b>Блокировка продавца в клубе снята</b>
+                  Клуб: <b>%s</b>
+                  Продавец: %s
+
+                  Связанные заказы и брони снова отображаются в «Моих покупках».
+                  """.formatted(escapeHtml(groupTitle), seller)));
     }
 
     private void assertGroupOwner(long telegramGroupId, long ownerTelegramId) {
@@ -1185,7 +1539,9 @@ public class MarketplaceService {
                 JOIN products p ON p.id = gb.product_id
                 JOIN stores s ON s.id = p.store_id WHERE gb.id = ?
                 """, Long.class, groupBuyId);
-        if (sellerId != null) notifyUser(sellerId, "<b>Групповая закупка</b>\n" + text);
+        if (sellerId != null) {
+            notifyUser(sellerId, text + "\n\n" + groupBuySummary(groupBuyId));
+        }
     }
 
     private void refreshSellerBlock(long sellerId) {
@@ -1199,9 +1555,23 @@ public class MarketplaceService {
         jdbc.update("UPDATE users SET seller_blocked = ? WHERE telegram_id = ?", shouldBlock, sellerId);
         if (shouldBlock && !asBoolean(state.get("seller_blocked"))) {
             notifyUser(sellerId, """
-                    <b>Лимит задолженности превышен.</b>
-                    Публикация объявлений и приём заказов приостановлены до оплаты комиссии.
-                    """);
+                    <b>Приём новых заказов приостановлен</b>
+                    Задолженность по комиссии: <b>%s</b>
+                    Допустимый лимит: <b>%s</b>
+
+                    Объявления и история сделок сохраняются, но новые покупки
+                    недоступны до погашения задолженности. После внесения платежа
+                    супер-администратор зафиксирует его в разделе комиссий.
+                    """.formatted(formatMoney(debt), formatMoney(limit)));
+        } else if (!shouldBlock && asBoolean(state.get("seller_blocked"))) {
+            notifyUser(sellerId, """
+                    <b>Приём новых заказов восстановлен</b>
+                    Текущая задолженность: <b>%s</b>
+                    Допустимый лимит: <b>%s</b>
+
+                    Ограничение по комиссии снято автоматически. Активные объявления
+                    снова могут принимать новые заказы.
+                    """.formatted(formatMoney(debt), formatMoney(limit)));
         }
     }
 
@@ -1223,6 +1593,157 @@ public class MarketplaceService {
             log.warn("Telegram notification to {} failed: {}",
                     telegramId, notificationError.getMessage());
         }
+    }
+
+    private Map<String, Object> orderNotificationDetails(long orderId) {
+        return jdbc.queryForMap("""
+                SELECT o.id, o.status, o.buyer_price_kopecks,
+                       o.seller_price_kopecks, o.commission_kopecks,
+                       p.title AS product_title, st.name AS store_name,
+                       buyer.telegram_id AS buyer_telegram_id,
+                       buyer.username AS buyer_username,
+                       COALESCE(NULLIF(buyer.display_name, ''),
+                         TRIM(buyer.first_name || ' ' || COALESCE(buyer.last_name, '')))
+                         AS buyer_name,
+                       seller.telegram_id AS seller_telegram_id,
+                       seller.username AS seller_username,
+                       COALESCE(NULLIF(seller.display_name, ''),
+                         TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
+                         AS seller_name
+                FROM orders o
+                JOIN products p ON p.id = o.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users buyer ON buyer.telegram_id = o.buyer_telegram_id
+                JOIN users seller ON seller.telegram_id = o.seller_telegram_id
+                WHERE o.id = ?
+                """, orderId);
+    }
+
+    private String orderSummary(Map<String, Object> order) {
+        return """
+                Заказ: <b>#%s</b>
+                Товар: <b>%s</b>
+                Магазин: %s
+                Сумма покупателя: <b>%s</b>
+                Покупатель: %s
+                Продавец: %s
+                """.formatted(
+                order.get("id"),
+                escapeHtml(order.get("product_title")),
+                escapeHtml(order.get("store_name")),
+                formatMoney(order.get("buyer_price_kopecks")),
+                userLabel(order, "buyer"),
+                userLabel(order, "seller")
+        ).strip();
+    }
+
+    private Map<String, Object> groupBuyNotificationDetails(long groupBuyId) {
+        return jdbc.queryForMap("""
+                SELECT gb.id, gb.status, gb.target_count,
+                       gb.final_price_kopecks, gb.payment_deadline,
+                       p.title AS product_title, st.name AS store_name,
+                       seller.telegram_id AS seller_telegram_id,
+                       seller.username AS seller_username,
+                       COALESCE(NULLIF(seller.display_name, ''),
+                         TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
+                         AS seller_name,
+                       (SELECT COUNT(*) FROM group_buy_reservations counted
+                        WHERE counted.group_buy_id = gb.id
+                          AND counted.status <> 'CANCELLED') AS reserved_count
+                FROM group_buys gb
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users seller ON seller.telegram_id = st.seller_telegram_id
+                WHERE gb.id = ?
+                """, groupBuyId);
+    }
+
+    private String groupBuySummary(long groupBuyId) {
+        Map<String, Object> groupBuy = groupBuyNotificationDetails(groupBuyId);
+        StringBuilder summary = new StringBuilder("""
+                Закупка: <b>#%s</b>
+                Товар: <b>%s</b>
+                Магазин: %s
+                Продавец: %s
+                Участники: <b>%s из %s</b>
+                """.formatted(
+                groupBuy.get("id"),
+                escapeHtml(groupBuy.get("product_title")),
+                escapeHtml(groupBuy.get("store_name")),
+                userLabel(groupBuy, "seller"),
+                groupBuy.get("reserved_count"),
+                groupBuy.get("target_count")
+        ).strip());
+        if (groupBuy.get("final_price_kopecks") != null) {
+            summary.append("\nСумма к оплате: <b>")
+                    .append(formatMoney(groupBuy.get("final_price_kopecks")))
+                    .append("</b>");
+        }
+        if (groupBuy.get("payment_deadline") != null) {
+            summary.append("\nОплатить до: <b>")
+                    .append(formatTime(groupBuy.get("payment_deadline")))
+                    .append("</b>");
+        }
+        return summary.toString();
+    }
+
+    private String userLabel(long telegramId) {
+        Map<String, Object> user = jdbc.queryForMap("""
+                SELECT telegram_id, username,
+                       COALESCE(NULLIF(display_name, ''),
+                         TRIM(first_name || ' ' || COALESCE(last_name, ''))) AS name
+                FROM users WHERE telegram_id = ?
+                """, telegramId);
+        String name = String.valueOf(user.get("name")).isBlank()
+                ? "ID " + telegramId
+                : escapeHtml(user.get("name"));
+        Object username = user.get("username");
+        return username == null || String.valueOf(username).isBlank()
+                ? name
+                : name + " (@" + escapeHtml(username) + ")";
+    }
+
+    private static String userLabel(Map<String, Object> row, String prefix) {
+        String keyPrefix = prefix == null || prefix.isBlank() ? "" : prefix + "_";
+        Object id = row.get(keyPrefix + "telegram_id");
+        Object nameValue = row.get(keyPrefix + "name");
+        String name = nameValue == null || String.valueOf(nameValue).isBlank()
+                ? "ID " + id
+                : escapeHtml(nameValue);
+        Object username = row.get(keyPrefix + "username");
+        return username == null || String.valueOf(username).isBlank()
+                ? name
+                : name + " (@" + escapeHtml(username) + ")";
+    }
+
+    private static String formatMoney(Object kopecks) {
+        long value = kopecks instanceof Number number
+                ? number.longValue()
+                : Long.parseLong(String.valueOf(kopecks));
+        return String.format(Locale.forLanguageTag("ru"), "%,d ₽", Math.round(value / 100.0));
+    }
+
+    private static String formatTime(Object value) {
+        try {
+            return TELEGRAM_TIME.format(Instant.parse(String.valueOf(value)));
+        } catch (RuntimeException ignored) {
+            return escapeHtml(value);
+        }
+    }
+
+    private static String escapeHtml(Object value) {
+        if (value == null) return "";
+        return String.valueOf(value)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
+    }
+
+    private static String abbreviate(Object value, int maxLength) {
+        if (value == null) return "";
+        String text = String.valueOf(value);
+        if (text.length() <= maxLength) return text;
+        return text.substring(0, Math.max(0, maxLength - 1)).stripTrailing() + "…";
     }
 
     private void publishProduct(long productId) {

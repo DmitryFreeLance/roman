@@ -133,6 +133,13 @@ class MarketplaceServiceSqliteTest {
                     assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
                     assertThat(row.get("buyer_phone")).isEqualTo("+70000000001");
                 });
+        assertThat(marketplace.notifications(sellerId))
+                .anySatisfy(row -> {
+                    assertThat(row.get("title")).isEqualTo("Новый заказ");
+                    assertThat(String.valueOf(row.get("body")))
+                            .contains("Brake fluid", "Заказ: #" + orderId,
+                                    "Сумма покупателя");
+                });
 
         marketplace.advanceOrder(orderId, firstBuyerId, "PAID");
         marketplace.advanceOrder(orderId, sellerId, "SHIPPED");
@@ -229,5 +236,26 @@ class MarketplaceServiceSqliteTest {
                     assertThat(((Number) row.get("group_buy_id")).longValue())
                             .isEqualTo(groupBuyId);
                 });
+
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isNotEmpty();
+        assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isNotEmpty();
+        marketplace.setGlobalUserBan(sellerId, true);
+        assertThat(marketplace.catalog(-100123L)).isEmpty();
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isEmpty();
+        assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isEmpty();
+        assertThat(marketplace.notifications(firstBuyerId))
+                .anySatisfy(row -> {
+                    assertThat(row.get("title"))
+                            .isEqualTo("Продавец заблокирован модерацией");
+                    assertThat(String.valueOf(row.get("body")))
+                            .contains("Мои покупки", "подтверждение платежа");
+                });
+
+        marketplace.setGlobalUserBan(sellerId, false);
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isNotEmpty();
+        assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isNotEmpty();
+        marketplace.setGroupSellerBan(-100123L, sellerId, sellerId, true);
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isEmpty();
+        assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isEmpty();
     }
 }

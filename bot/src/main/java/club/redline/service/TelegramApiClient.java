@@ -9,6 +9,7 @@ import org.springframework.web.client.RestClient;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Component
@@ -83,10 +84,23 @@ public class TelegramApiClient {
                                String description, long priceKopecks, int stock, String imageUrl) {
         String caption = """
                 <b>%s</b>
+                Товар: <b>#%d</b>
+
                 %s
 
-                <b>%s ₽</b> · В наличии: %d
-                """.formatted(title, description, priceKopecks / 100, stock);
+                Цена для покупателя: <b>%s</b>
+                В наличии: <b>%d шт.</b>
+
+                В карточке товара доступны сведения о продавце, рейтинг,
+                условия покупки или бронирования и итоговые действия по сделке.
+                """.formatted(
+                escapeHtml(title),
+                productId,
+                escapeHtml(abbreviate(description, 500)),
+                String.format(Locale.forLanguageTag("ru"), "%,d ₽",
+                        Math.round(priceKopecks / 100.0)),
+                stock
+        );
         call("sendPhoto", Map.of(
                 "chat_id", groupId,
                 "message_thread_id", threadId,
@@ -95,11 +109,23 @@ public class TelegramApiClient {
                 "parse_mode", "HTML",
                 "reply_markup", Map.of(
                         "inline_keyboard", List.of(List.of(Map.of(
-                                "text", "Подробнее",
+                                "text", "Открыть товар",
                                 "url", productStartLink(productId, groupId)
                         )))
                 )
         ));
+    }
+
+    private static String escapeHtml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
+    }
+
+    private static String abbreviate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) return value;
+        return value.substring(0, Math.max(0, maxLength - 1)).stripTrailing() + "…";
     }
 
     private String productStartLink(long productId, long groupId) {
