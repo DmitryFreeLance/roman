@@ -79,6 +79,23 @@ public class MarketplaceController {
         return marketplace.categories();
     }
 
+    @GetMapping("/me/favorites")
+    public List<Long> favorites(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        return marketplace.favorites(registered(initData).id());
+    }
+
+    @PutMapping("/me/favorites/{productId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setFavorite(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId,
+            @RequestBody FavoriteRequest request) {
+        marketplace.setFavorite(
+                registered(initData).id(), productId, request.favorite()
+        );
+    }
+
     @PostMapping(value = "/uploads", consumes = "multipart/form-data")
     public Map<String, String> upload(
             @RequestHeader("X-Telegram-Init-Data") String initData,
@@ -267,6 +284,15 @@ public class MarketplaceController {
         ));
     }
 
+    @PostMapping("/orders/{id}/review")
+    @ResponseStatus(HttpStatus.CREATED)
+    public void createReview(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id,
+            @Valid @RequestBody ReviewRequest request) {
+        marketplace.createReview(registered(initData).id(), id, request.rating());
+    }
+
     @PostMapping("/group-buys/{id}/reports")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> reportGroupBuySeller(
@@ -409,7 +435,8 @@ public class MarketplaceController {
                             @Valid @RequestBody AdminGroupRequest request) {
         requireSuperAdmin(initData);
         marketplace.updateGroupAsSuperAdmin(
-                groupId, request.commissionPercent(), request.active()
+                groupId, request.commissionPercent(),
+                request.debtLimitKopecks(), request.active()
         );
     }
 
@@ -512,12 +539,15 @@ public class MarketplaceController {
     ) {}
     public record ProductActiveRequest(boolean active) {}
     public record ReserveRequest(String phone) {}
+    public record FavoriteRequest(boolean favorite) {}
+    public record ReviewRequest(@Min(1) @Max(5) int rating) {}
     public record SellerReportRequest(@NotBlank String reason) {}
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
     public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent) {}
     public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
+                                    @Positive long debtLimitKopecks,
                                     boolean active) {}
     public record SellerBanRequest(boolean banned) {}
     public record UserBanRequest(boolean banned) {}

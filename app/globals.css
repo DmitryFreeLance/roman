@@ -733,7 +733,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .buyers-list small { overflow-wrap: anywhere; }
 .group-management-row {
   display: grid;
-  grid-template-columns: auto minmax(160px, 1fr) 120px 90px auto;
+  grid-template-columns: auto minmax(160px, 1fr) 110px 125px 90px auto;
   align-items: center;
   gap: 12px;
   padding: 13px 15px;
@@ -814,6 +814,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: #888;
   font-size: 9px;
 }
+.favorites-filter {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  background: #141414;
+  color: #888;
+  font-size: 8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.favorites-filter.active { color: #fff; border-color: rgba(227,27,35,.65); background: rgba(227,27,35,.12); }
+.favorites-filter svg { color: var(--red-2); }
+.favorites-filter em { min-width: 17px; height: 17px; padding: 0 4px; display: grid; place-items: center; border-radius: 9px; background: var(--red); color: #fff; font-size: 7px; font-style: normal; }
 .storefront-row {
   display: grid;
   grid-auto-flow: column;
@@ -959,14 +975,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .order-head-actions { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .order-head-actions > span { color: #777; font-size: 8px; }
 .report-order-button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(227,27,35,.35); background: rgba(227,27,35,.08); color: #ff666d; cursor: pointer; }
-.report-modal { width: min(460px, calc(100vw - 24px)); margin: auto; padding: 24px; border: 1px solid #383838; background: #111; }
+.report-modal { width: min(460px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; margin: auto; padding: 24px; border: 1px solid #383838; background: #111; }
 .report-modal-icon { width: 46px; height: 46px; display: grid; place-items: center; background: rgba(227,27,35,.1); color: var(--red-2); border: 1px solid rgba(227,27,35,.3); }
 .report-modal h2 { margin: 15px 0 4px; font-family: var(--font-oswald); text-transform: uppercase; font-size: 26px; }
 .report-modal > p { color: #777; font-size: 9px; margin: 0 0 18px; }
 .report-modal label { display: flex; flex-direction: column; gap: 7px; }
 .report-modal label span { color: #777; font-size: 8px; text-transform: uppercase; }
 .report-modal textarea { width: 100%; padding: 13px; border: 1px solid var(--line); background: #151515; color: #eee; resize: vertical; }
-.report-modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.report-modal-actions { position: sticky; bottom: -24px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); background: #111; }
 .group-purchase-list { display: flex; flex-direction: column; gap: 10px; }
 .group-purchase-card { border-top: 2px solid var(--red); }
 .group-buy-guidance,
@@ -1004,6 +1020,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .report-review-actions { display: flex; gap: 8px; margin-top: 13px; }
 .report-review-actions button { min-height: 36px; padding: 0 14px; border: 1px solid var(--line); background: #1b1b1b; color: #aaa; font-size: 8px; cursor: pointer; }
 .report-review-actions button.ban-action { border-color: rgba(227,27,35,.36); color: #ff7177; }
+.order-rating { margin-top: 10px; }
+.rated-action { color: var(--gold); opacity: 1 !important; cursor: default; }
+.rating-picker { padding: 15px; border: 1px solid var(--line); background: #161616; }
+.rating-picker > span { display: block; color: #888; font-size: 9px; margin-bottom: 10px; }
+.rating-picker > div { display: flex; gap: 5px; margin-bottom: 13px; }
+.rating-picker > div button { width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--gold); cursor: pointer; }
+.rating-picker .main-action { min-height: 42px; }
+.modal-rating { margin: -5px 0 12px; }
 .client-details {
   display: flex;
   flex-direction: column;
@@ -1058,6 +1082,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .group-management-row > button { grid-column: 1 / -1; }
   .group-management-row .active-check { grid-column: 1 / 2; }
   .group-management-row > button { grid-column: 2 / 3; align-self: end; }
+  .favorites-filter { padding: 0 9px; }
   .procurement-head { grid-template-columns: 48px minmax(0, 1fr) auto; padding: 12px; }
   .procurement-head h2 { font-size: 17px; overflow-wrap: anywhere; }
   .price-fix-panel,

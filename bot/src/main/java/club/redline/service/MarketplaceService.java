@@ -51,8 +51,11 @@ public class MarketplaceService {
     public void registerGroup(long groupId, String title, long ownerTelegramId, int shopThreadId) {
         jdbc.update("""
                 INSERT INTO telegram_groups
-                  (telegram_group_id, title, owner_telegram_id, shop_thread_id, commission_percent)
-                VALUES (?, ?, ?, ?, 3.5)
+                  (telegram_group_id, title, owner_telegram_id, shop_thread_id,
+                   commission_percent, debt_limit_kopecks)
+                VALUES (?, ?, ?, ?, 3.5,
+                  (SELECT default_debt_limit_kopecks
+                   FROM platform_settings WHERE singleton = 1))
                 ON CONFLICT (telegram_group_id) DO UPDATE SET
                   title = EXCLUDED.title,
                   owner_telegram_id = EXCLUDED.owner_telegram_id,
@@ -69,9 +72,19 @@ public class MarketplaceService {
                          (1 + s.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, st.id AS store_id, st.name AS store_name,
-                       st.seller_telegram_id, p.active,
+                       st.seller_telegram_id, s.username AS seller_username,
+                       COALESCE(NULLIF(s.display_name, ''),
+                         TRIM(s.first_name || ' ' || COALESCE(s.last_name, '')))
+                         AS seller_name,
+                       p.active,
                        COALESCE(AVG(r.rating), 0) AS rating,
-                       COUNT(r.id) AS review_count,
+                       COUNT(DISTINCT r.id) AS review_count,
+                       COALESCE((
+                         SELECT AVG(sr.rating)
+                         FROM reviews sr
+                         JOIN products sp ON sp.id = sr.product_id
+                         WHERE sp.store_id = st.id
+                       ), 0) AS store_rating,
                        gb.id AS group_buy_id, gb.target_count,
                        gb.status AS group_buy_status, gb.payment_deadline,
                        COUNT(gbr.id) FILTER (WHERE gbr.status <> 'CANCELLED') AS reserved_count
@@ -89,7 +102,8 @@ public class MarketplaceService {
                     WHERE b.group_id = g.id AND b.seller_telegram_id = st.seller_telegram_id
                   )
                 GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
-                         st.id, st.name,
+                         st.id, st.name, s.username, s.display_name,
+                         s.first_name, s.last_name,
                          gb.target_count, gb.status, gb.payment_deadline
                 ORDER BY p.created_at DESC
                 """, telegramGroupId);
@@ -105,6 +119,8 @@ public class MarketplaceService {
                          AS buyer_price_kopecks,
                        p.image_urls, p.active, st.id AS store_id, st.name AS store_name,
                        st.seller_telegram_id,
+                       COALESCE(AVG(r.rating), 0) AS rating,
+                       COUNT(DISTINCT r.id) AS review_count,
                        gb.id AS group_buy_id, gb.target_count,
                        gb.status AS group_buy_status,
                        COUNT(DISTINCT gbr.id) FILTER (WHERE gbr.status <> 'CANCELLED')
@@ -117,6 +133,7 @@ public class MarketplaceService {
                 LEFT JOIN group_buys gb ON gb.product_id = p.id
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
                 LEFT JOIN orders o ON o.product_id = p.id
+                LEFT JOIN reviews r ON r.product_id = p.id
                 WHERE g.telegram_group_id = ? AND st.seller_telegram_id = ?
                   AND p.deleted = 0
                 GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
@@ -254,11 +271,18 @@ public class MarketplaceService {
 
     public Map<String, Object> profile(long telegramId) {
         return jdbc.queryForMap("""
-                SELECT telegram_id, username, first_name, last_name,
-                       display_name, phone, selected_group_id, registered,
-                       seller_blocked, globally_banned,
-                       bot_commission_percent, commission_debt_kopecks, debt_limit_kopecks
-                FROM users WHERE telegram_id = ?
+                SELECT u.telegram_id, u.username, u.first_name, u.last_name,
+                       u.display_name, u.phone, u.selected_group_id, u.registered,
+                       (u.commission_debt_kopecks >= COALESCE(
+                         g.debt_limit_kopecks, u.debt_limit_kopecks
+                       )) AS seller_blocked,
+                       u.globally_banned, u.bot_commission_percent,
+                       u.commission_debt_kopecks,
+                       COALESCE(g.debt_limit_kopecks, u.debt_limit_kopecks)
+                         AS debt_limit_kopecks
+                FROM users u
+                LEFT JOIN telegram_groups g ON g.id = u.selected_group_id
+                WHERE u.telegram_id = ?
                 """, telegramId);
     }
 
@@ -292,6 +316,7 @@ public class MarketplaceService {
         return jdbc.queryForList("""
                 SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
                        g.shop_thread_id, g.commission_percent,
+                       g.debt_limit_kopecks,
                        COUNT(DISTINCT p.id) AS product_count
                 FROM telegram_groups g
                 LEFT JOIN products p ON p.group_id = g.id
@@ -317,6 +342,37 @@ public class MarketplaceService {
                 WHERE active = 1
                 ORDER BY sort_order, name
                 """);
+    }
+
+    public List<Long> favorites(long telegramId) {
+        return jdbc.queryForList("""
+                SELECT product_id FROM favorites
+                WHERE user_telegram_id = ?
+                ORDER BY created_at DESC
+                """, Long.class, telegramId);
+    }
+
+    @Transactional
+    public void setFavorite(long telegramId, long productId, boolean favorite) {
+        if (favorite) {
+            Integer exists = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM products
+                    WHERE id = ? AND deleted = 0
+                    """, Integer.class, productId);
+            if (exists == null || exists == 0) {
+                throw new IllegalArgumentException("Товар не найден");
+            }
+            jdbc.update("""
+                    INSERT INTO favorites (user_telegram_id, product_id)
+                    VALUES (?, ?)
+                    ON CONFLICT (user_telegram_id, product_id) DO NOTHING
+                    """, telegramId, productId);
+        } else {
+            jdbc.update("""
+                    DELETE FROM favorites
+                    WHERE user_telegram_id = ? AND product_id = ?
+                    """, telegramId, productId);
+        }
     }
 
     @Transactional
@@ -520,6 +576,7 @@ public class MarketplaceService {
                 SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
                        o.commission_kopecks, o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
+                       review.rating AS review_rating,
                        st.id AS store_id, st.name AS store_name,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
@@ -536,9 +593,39 @@ public class MarketplaceService {
                 JOIN stores st ON st.id = p.store_id
                 JOIN users seller ON seller.telegram_id = o.seller_telegram_id
                 JOIN telegram_groups g ON g.id = o.group_id
+                LEFT JOIN reviews review ON review.order_id = o.id
                 WHERE o.buyer_telegram_id = ? AND g.telegram_group_id = ?
                 ORDER BY o.created_at DESC
                 """, buyerTelegramId, telegramGroupId);
+    }
+
+    @Transactional
+    public void createReview(long buyerTelegramId, long orderId, int rating) {
+        Map<String, Object> order = jdbc.queryForMap("""
+                SELECT product_id, seller_telegram_id, buyer_telegram_id, status
+                FROM orders WHERE id = ?
+                """, orderId);
+        if (((Number) order.get("buyer_telegram_id")).longValue() != buyerTelegramId) {
+            throw new IllegalArgumentException("Оценить заказ может только покупатель");
+        }
+        if (!"COMPLETED".equals(String.valueOf(order.get("status")))) {
+            throw new IllegalStateException("Оценка доступна после завершения заказа");
+        }
+        if (rating < 1 || rating > 5) {
+            throw new IllegalArgumentException("Выберите оценку от 1 до 5");
+        }
+        int inserted = jdbc.update("""
+                INSERT INTO reviews
+                  (order_id, product_id, seller_telegram_id, buyer_telegram_id, rating)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (order_id) DO NOTHING
+                """, orderId,
+                ((Number) order.get("product_id")).longValue(),
+                ((Number) order.get("seller_telegram_id")).longValue(),
+                buyerTelegramId, rating);
+        if (inserted == 0) {
+            throw new IllegalStateException("Вы уже оценили этот заказ");
+        }
     }
 
     public List<Map<String, Object>> groupBuyPurchases(long buyerTelegramId,
@@ -907,7 +994,8 @@ public class MarketplaceService {
     public List<Map<String, Object>> groups() {
         return jdbc.queryForList("""
                 SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
-                       g.shop_thread_id, g.commission_percent, g.active,
+                       g.shop_thread_id, g.commission_percent,
+                       g.debt_limit_kopecks, g.active,
                        COUNT(DISTINCT s.id) AS stores,
                        COUNT(DISTINCT p.id) FILTER (
                          WHERE p.active = 1 AND p.deleted = 0
@@ -976,11 +1064,13 @@ public class MarketplaceService {
     }
 
     @Transactional
-    public void updateGroupAsSuperAdmin(long groupId, double commissionPercent, boolean active) {
+    public void updateGroupAsSuperAdmin(long groupId, double commissionPercent,
+                                        long debtLimitKopecks, boolean active) {
         int updated = jdbc.update("""
-                UPDATE telegram_groups SET commission_percent = ?, active = ?
+                UPDATE telegram_groups SET commission_percent = ?,
+                  debt_limit_kopecks = ?, active = ?
                 WHERE id = ?
-                """, commissionPercent, active, groupId);
+                """, commissionPercent, debtLimitKopecks, active, groupId);
         if (updated == 0) throw new IllegalArgumentException("Group not found");
     }
 
@@ -1047,11 +1137,16 @@ public class MarketplaceService {
 
     private void assertSellerCanTrade(long sellerId, long groupId) {
         Map<String, Object> seller = jdbc.queryForMap("""
-                SELECT u.commission_debt_kopecks, u.debt_limit_kopecks, u.globally_banned,
+                SELECT u.commission_debt_kopecks,
+                  COALESCE(g.debt_limit_kopecks, u.debt_limit_kopecks)
+                    AS debt_limit_kopecks,
+                  u.globally_banned,
                   EXISTS(SELECT 1 FROM group_seller_bans b
                     WHERE b.group_id = ? AND b.seller_telegram_id = u.telegram_id) AS group_banned
-                FROM users u WHERE u.telegram_id = ?
-                """, groupId, sellerId);
+                FROM users u
+                LEFT JOIN telegram_groups g ON g.id = ?
+                WHERE u.telegram_id = ?
+                """, groupId, groupId, sellerId);
         long debt = ((Number) seller.get("commission_debt_kopecks")).longValue();
         long limit = ((Number) seller.get("debt_limit_kopecks")).longValue();
         if (asBoolean(seller.get("globally_banned")) ||

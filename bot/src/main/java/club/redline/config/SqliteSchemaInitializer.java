@@ -36,6 +36,7 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         ensureUserProfileColumns(jdbc);
         ensureStoreColumns(jdbc);
         ensureProductColumns(jdbc);
+        ensureGroupColumns(jdbc);
 
         RedlineProperties.Marketplace marketplace = properties.marketplace();
         jdbc.update("""
@@ -86,6 +87,23 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         Set<String> columns = columns(jdbc, "products");
         if (!columns.contains("deleted")) {
             jdbc.execute("ALTER TABLE products ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
+    }
+
+    private void ensureGroupColumns(JdbcTemplate jdbc) {
+        Set<String> columns = columns(jdbc, "telegram_groups");
+        if (!columns.contains("debt_limit_kopecks")) {
+            jdbc.execute("""
+                    ALTER TABLE telegram_groups
+                    ADD COLUMN debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000
+                    """);
+            jdbc.update("""
+                    UPDATE telegram_groups
+                    SET debt_limit_kopecks = (
+                      SELECT default_debt_limit_kopecks
+                      FROM platform_settings WHERE singleton = 1
+                    )
+                    """);
         }
     }
 

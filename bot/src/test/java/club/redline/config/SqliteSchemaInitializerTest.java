@@ -34,7 +34,7 @@ class SqliteSchemaInitializerTest {
                 WHERE type = 'table' AND name IN (
                   'users', 'telegram_groups', 'stores', 'products',
                   'group_buys', 'group_buy_reservations', 'orders', 'reviews',
-                  'notifications', 'seller_reports'
+                  'notifications', 'seller_reports', 'favorites'
                 )
                 """, Integer.class);
         Integer settings = jdbc.queryForObject(
@@ -49,7 +49,7 @@ class SqliteSchemaInitializerTest {
                 """, Integer.class);
 
         assertThat(foreignKeys).isEqualTo(1);
-        assertThat(tables).isEqualTo(10);
+        assertThat(tables).isEqualTo(11);
         assertThat(settings).isEqualTo(1);
         assertThat(businessRows).isZero();
     }

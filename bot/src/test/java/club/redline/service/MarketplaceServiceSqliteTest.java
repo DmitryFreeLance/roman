@@ -115,6 +115,9 @@ class MarketplaceServiceSqliteTest {
                 )
         );
         assertThat(marketplace.sellerProducts(sellerId, -100123L)).hasSize(2);
+        marketplace.setFavorite(firstBuyerId, regularProductId, true);
+        assertThat(marketplace.favorites(firstBuyerId))
+                .containsExactly(regularProductId);
 
         long orderId = marketplace.createOrder(firstBuyerId, regularProductId);
         assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L))
@@ -134,10 +137,26 @@ class MarketplaceServiceSqliteTest {
         marketplace.advanceOrder(orderId, firstBuyerId, "PAID");
         marketplace.advanceOrder(orderId, sellerId, "SHIPPED");
         marketplace.advanceOrder(orderId, firstBuyerId, "COMPLETED");
+        marketplace.createReview(firstBuyerId, orderId, 5);
 
         assertThat(jdbc.queryForObject(
                 "SELECT status FROM orders WHERE id = ?", String.class, orderId
         )).isEqualTo("COMPLETED");
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L))
+                .singleElement()
+                .satisfies(row ->
+                        assertThat(((Number) row.get("review_rating")).intValue())
+                                .isEqualTo(5));
+        assertThat(marketplace.catalog(-100123L))
+                .filteredOn(row ->
+                        ((Number) row.get("id")).longValue() == regularProductId)
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("rating")).doubleValue())
+                            .isEqualTo(5.0);
+                    assertThat(((Number) row.get("store_rating")).doubleValue())
+                            .isEqualTo(5.0);
+                });
         assertThat(marketplace.notifications(sellerId)).isNotEmpty();
 
         long cancelledOrderId = marketplace.createOrder(secondBuyerId, regularProductId);
@@ -190,6 +209,15 @@ class MarketplaceServiceSqliteTest {
                 .anySatisfy(row ->
                         assertThat(((Number) row.get("telegram_id")).longValue())
                                 .isEqualTo(sellerId));
+        marketplace.updateGroupAsSuperAdmin(groupId, 4.5, 75_000L, true);
+        assertThat(marketplace.groups())
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("commission_percent")).doubleValue())
+                            .isEqualTo(4.5);
+                    assertThat(((Number) row.get("debt_limit_kopecks")).longValue())
+                            .isEqualTo(75_000L);
+                });
         long groupReportId = marketplace.submitGroupBuyReport(
                 firstBuyerId, groupBuyId, "Не сообщили точную дату доставки"
         );

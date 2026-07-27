@@ -21,6 +21,7 @@ import {
   Search,
   ShieldCheck,
   ShoppingBag,
+  Star,
   Store,
   Trash2,
   UsersRound,
@@ -65,6 +66,7 @@ type Club = {
   ownerTelegramId: number;
   shopThreadId: number;
   commissionPercent: number;
+  debtLimitKopecks: number;
   productCount: number;
 };
 
@@ -101,10 +103,13 @@ type Product = {
   storeId: number;
   storeName: string;
   sellerTelegramId: number;
+  sellerName?: string;
+  sellerUsername?: string;
   active: boolean;
   orderCount: number;
   rating: number;
   reviewCount: number;
+  storeRating: number;
   groupBuyId?: number;
   targetCount?: number;
   reservedCount: number;
@@ -171,6 +176,7 @@ type Order = {
   buyerName?: string;
   buyerUsername?: string;
   buyerPhone?: string;
+  reviewRating?: number;
 };
 
 type TelegramWebApp = {
@@ -185,6 +191,7 @@ type TelegramWebApp = {
   };
   ready: () => void;
   expand: () => void;
+  hideKeyboard?: () => void;
   HapticFeedback?: {
     impactOccurred: (style: "light" | "medium" | "heavy") => void;
     notificationOccurred: (type: "success" | "warning" | "error") => void;
@@ -244,6 +251,7 @@ const camelClub = (row: Record<string, unknown>): Club => ({
   ownerTelegramId: asNumber(row.owner_telegram_id),
   shopThreadId: asNumber(row.shop_thread_id),
   commissionPercent: asNumber(row.commission_percent),
+  debtLimitKopecks: asNumber(row.debt_limit_kopecks),
   productCount: asNumber(row.product_count),
 });
 
@@ -290,10 +298,13 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     storeId: asNumber(row.store_id),
     storeName: String(row.store_name || ""),
     sellerTelegramId: asNumber(row.seller_telegram_id),
+    sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
     active: row.active === undefined ? true : asBoolean(row.active),
     orderCount: asNumber(row.order_count),
     rating: asNumber(row.rating),
     reviewCount: asNumber(row.review_count),
+    storeRating: asNumber(row.store_rating),
     groupBuyId: row.group_buy_id ? asNumber(row.group_buy_id) : undefined,
     targetCount: row.target_count ? asNumber(row.target_count) : undefined,
     reservedCount: asNumber(row.reserved_count),
@@ -331,6 +342,7 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     buyerName: row.buyer_name ? String(row.buyer_name) : undefined,
     buyerUsername: row.buyer_username ? String(row.buyer_username) : undefined,
     buyerPhone: row.buyer_phone ? String(row.buyer_phone) : undefined,
+    reviewRating: row.review_rating ? asNumber(row.review_rating) : undefined,
   };
 };
 
@@ -394,6 +406,7 @@ function dismissKeyboard(event: React.PointerEvent<HTMLElement>) {
   }
   const active = document.activeElement;
   if (active instanceof HTMLElement) active.blur();
+  window.Telegram?.WebApp?.hideKeyboard?.();
 }
 
 export function RedlineApp() {
@@ -413,6 +426,7 @@ export function RedlineApp() {
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState("");
   const [favorites, setFavorites] = useState<number[]>([]);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -476,6 +490,23 @@ export function RedlineApp() {
       window.clearInterval(timer);
     };
     // Notifications use the Telegram session captured during bootstrap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initData, profile?.registered]);
+
+  useEffect(() => {
+    if (!initData || !profile?.registered) return;
+    let cancelled = false;
+    void request<number[]>("/me/favorites")
+      .then((rows) => {
+        if (!cancelled) setFavorites(rows.map(Number));
+      })
+      .catch(() => {
+        // Favorites can be retried on the next app opening.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Favorites belong to the authenticated Telegram user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initData, profile?.registered]);
 
@@ -586,11 +617,12 @@ export function RedlineApp() {
           (activeCategory === "Все" ||
             product.category === activeCategory) &&
           (activeStoreId === null || product.storeId === activeStoreId) &&
+          (!favoritesOnly || favorites.includes(product.id)) &&
           `${product.title} ${product.storeName}`
             .toLowerCase()
             .includes(query.toLowerCase()),
       ),
-    [activeCategory, activeStoreId, products, query],
+    [activeCategory, activeStoreId, favorites, favoritesOnly, products, query],
   );
 
   const storefronts = useMemo(() => {
@@ -600,7 +632,7 @@ export function RedlineApp() {
       if (current) {
         current.productCount += 1;
         if (!current.cover && product.images[0]) current.cover = product.images[0];
-        current.rating = Math.max(current.rating, product.rating);
+        current.rating = product.storeRating;
       } else {
         byId.set(product.storeId, {
           id: product.storeId,
@@ -608,7 +640,7 @@ export function RedlineApp() {
           sellerTelegramId: product.sellerTelegramId,
           productCount: 1,
           cover: product.images[0],
-          rating: product.rating,
+          rating: product.storeRating,
         });
       }
     }
@@ -635,6 +667,28 @@ export function RedlineApp() {
     setDrawerOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  async function toggleFavorite(productId: number) {
+    const favorite = !favorites.includes(productId);
+    setFavorites((items) =>
+      favorite ? [...items, productId] : items.filter((id) => id !== productId),
+    );
+    try {
+      await request(`/me/favorites/${productId}`, {
+        method: "PUT",
+        body: JSON.stringify({ favorite }),
+      });
+    } catch (favoriteError) {
+      setFavorites((items) =>
+        favorite ? items.filter((id) => id !== productId) : [...items, productId],
+      );
+      setToast(
+        favoriteError instanceof Error
+          ? favoriteError.message
+          : "Не удалось изменить избранное",
+      );
+    }
+  }
 
   async function reserve(product: Product) {
     if (!product.groupBuyId || !profile?.phone) return;
@@ -688,7 +742,7 @@ export function RedlineApp() {
   }
 
   if (loading) {
-    return <StatePage icon={<Gauge />} title="Загрузка REDLINE" text="Получаем данные из Telegram и SQLite…" />;
+    return <StatePage icon={<Gauge />} title="Загрузка REDLINE" text="Получаем данные из Telegram и Базы данных…" />;
   }
 
   if (!initData) {
@@ -745,9 +799,18 @@ export function RedlineApp() {
         onChoose={async (club) => {
           await request(`/me/group/${club.id}`, { method: "PUT" });
           setProfile((current) =>
-            current ? { ...current, selectedGroupId: club.id } : current,
+            current
+              ? {
+                  ...current,
+                  selectedGroupId: club.id,
+                  debtLimitKopecks: club.debtLimitKopecks,
+                  sellerBlocked:
+                    current.commissionDebtKopecks >= club.debtLimitKopecks,
+                }
+              : current,
           );
           setActiveStoreId(null);
+          setFavoritesOnly(false);
           setSelectedClub(club);
         }}
       />
@@ -787,10 +850,18 @@ export function RedlineApp() {
                   await request(`/me/group/${nextClub.id}`, { method: "PUT" });
                   setProfile((current) =>
                     current
-                      ? { ...current, selectedGroupId: nextClub.id }
+                      ? {
+                          ...current,
+                          selectedGroupId: nextClub.id,
+                          debtLimitKopecks: nextClub.debtLimitKopecks,
+                          sellerBlocked:
+                            current.commissionDebtKopecks >=
+                            nextClub.debtLimitKopecks,
+                        }
                       : current,
                   );
                   setActiveStoreId(null);
+                  setFavoritesOnly(false);
                   setActiveCategory("Все");
                   setSelectedClub(nextClub);
                 } catch (selectionError) {
@@ -874,6 +945,8 @@ export function RedlineApp() {
             storefronts={storefronts}
             activeStoreId={activeStoreId}
             setActiveStoreId={setActiveStoreId}
+            favoritesOnly={favoritesOnly}
+            setFavoritesOnly={setFavoritesOnly}
             totalProducts={products.length}
             groupCount={groupProducts.length}
             activeCategory={activeCategory}
@@ -881,13 +954,7 @@ export function RedlineApp() {
             query={query}
             setQuery={setQuery}
             favorites={favorites}
-            onFavorite={(id) =>
-              setFavorites((items) =>
-                items.includes(id)
-                  ? items.filter((item) => item !== id)
-                  : [...items, id],
-              )
-            }
+            onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
             onReserve={reserve}
             onNavigate={navigate}
@@ -900,6 +967,7 @@ export function RedlineApp() {
             text="Закупки появляются после публикации продавцом."
             products={groupProducts}
             favorites={favorites}
+            onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
             onReserve={reserve}
           />
@@ -910,6 +978,9 @@ export function RedlineApp() {
             mode="purchases"
             club={selectedClub}
             request={request}
+            onCatalogChanged={async () => {
+              if (selectedClub) await loadCatalog(selectedClub.telegramGroupId);
+            }}
             onToast={setToast}
           />
         )}
@@ -995,13 +1066,7 @@ export function RedlineApp() {
         <ProductModal
           product={selectedProduct}
           favorite={favorites.includes(selectedProduct.id)}
-          onFavorite={() =>
-            setFavorites((items) =>
-              items.includes(selectedProduct.id)
-                ? items.filter((id) => id !== selectedProduct.id)
-                : [...items, selectedProduct.id],
-            )
-          }
+          onFavorite={() => void toggleFavorite(selectedProduct.id)}
           onClose={() => setSelectedProduct(null)}
           onReserve={() => void reserve(selectedProduct)}
           onBuy={() => void buy(selectedProduct)}
@@ -1164,6 +1229,8 @@ function Market({
   storefronts,
   activeStoreId,
   setActiveStoreId,
+  favoritesOnly,
+  setFavoritesOnly,
   totalProducts,
   groupCount,
   activeCategory,
@@ -1183,6 +1250,8 @@ function Market({
   storefronts: Storefront[];
   activeStoreId: number | null;
   setActiveStoreId: (value: number | null) => void;
+  favoritesOnly: boolean;
+  setFavoritesOnly: (value: boolean) => void;
   totalProducts: number;
   groupCount: number;
   activeCategory: string;
@@ -1225,13 +1294,26 @@ function Market({
           <>
             <div className="storefront-heading">
               <div><span className="section-kicker">МАГАЗИНЫ</span><h3>Выберите магазин</h3></div>
-              <span>{storefronts.length}</span>
+              <button
+                className={`favorites-filter ${favoritesOnly ? "active" : ""}`}
+                onClick={() => {
+                  setFavoritesOnly(!favoritesOnly);
+                  setActiveStoreId(null);
+                  setActiveCategory("Все");
+                  setQuery("");
+                }}
+              >
+                <Heart size={14} fill={favoritesOnly ? "currentColor" : "none"} />
+                Избранное
+                {favorites.length > 0 && <em>{favorites.length}</em>}
+              </button>
             </div>
             <div className="storefront-row">
               <button
                 className={`storefront-card all-stores ${activeStoreId === null ? "active" : ""}`}
                 onClick={() => {
                   setActiveStoreId(null);
+                  setFavoritesOnly(false);
                   setActiveCategory("Все");
                   setQuery("");
                 }}
@@ -1246,6 +1328,7 @@ function Market({
                   className={`storefront-card ${activeStoreId === store.id ? "active" : ""}`}
                   onClick={() => {
                     setActiveStoreId(store.id);
+                    setFavoritesOnly(false);
                     setActiveCategory("Все");
                     setQuery("");
                   }}
@@ -1265,7 +1348,9 @@ function Market({
             <div className="store-products-heading">
               <span className="section-kicker">ТОВАРЫ</span>
               <h3>
-                {activeStoreId === null
+                {favoritesOnly
+                  ? "Избранные товары"
+                  : activeStoreId === null
                   ? "Все товары"
                   : storefronts.find((store) => store.id === activeStoreId)?.name || "Товары магазина"}
               </h3>
@@ -1294,7 +1379,11 @@ function Market({
                 ))}
               </div>
             ) : (
-              <div className="empty-state"><Gauge size={30} /><h3>Магазин пока пуст</h3><p>Здесь появятся только реальные объявления участников.</p></div>
+              <div className="empty-state">
+                {favoritesOnly ? <Heart size={30} /> : <Gauge size={30} />}
+                <h3>{favoritesOnly ? "В избранном пока пусто" : "Магазин пока пуст"}</h3>
+                <p>{favoritesOnly ? "Нажмите на сердечко в карточке товара, чтобы сохранить его здесь." : "Здесь появятся только реальные объявления участников."}</p>
+              </div>
             )}
           </>
         )}
@@ -1363,6 +1452,11 @@ function ProductCard({
         <span className="seller-line"><BadgeCheck size={12} />{product.storeName}</span>
         <button className="product-title" onClick={onOpen}>{product.title}</button>
         <p>{product.description}</p>
+        <div className="rating-line">
+          <Star size={13} fill={product.reviewCount ? "currentColor" : "none"} />
+          <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
+          <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Нет оценок"}</span>
+        </div>
         {product.kind === "group" && product.targetCount && (
           <div className="group-progress">
             <div className="progress-label"><span>Забронировали</span><b>{product.reservedCount} из {product.targetCount}</b></div>
@@ -1404,6 +1498,11 @@ function ProductModal({
         <div className="modal-body">
           <span className="seller-line"><BadgeCheck size={13} />{product.storeName}</span>
           <h2>{product.title}</h2>
+          <div className="rating-line modal-rating">
+            <Star size={15} fill={product.reviewCount ? "currentColor" : "none"} />
+            <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
+            <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Оценок пока нет"}</span>
+          </div>
           <p>{product.description}</p>
           {product.kind === "group" && product.targetCount && (
             <div className="modal-group-box">
@@ -1424,6 +1523,7 @@ function SimpleList({
   text,
   products,
   favorites,
+  onFavorite,
   onOpen,
   onReserve,
 }: {
@@ -1431,6 +1531,7 @@ function SimpleList({
   text: string;
   products: Product[];
   favorites: number[];
+  onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
   onReserve: (product: Product) => Promise<void>;
 }) {
@@ -1440,7 +1541,7 @@ function SimpleList({
       {products.length ? (
         <div className="catalog-grid">
           {products.map((product) => (
-            <ProductCard key={product.id} product={product} favorite={favorites.includes(product.id)} onFavorite={() => undefined} onOpen={() => onOpen(product)} onReserve={() => void onReserve(product)} />
+            <ProductCard key={product.id} product={product} favorite={favorites.includes(product.id)} onFavorite={() => onFavorite(product.id)} onOpen={() => onOpen(product)} onReserve={() => void onReserve(product)} />
           ))}
         </div>
       ) : (
@@ -1722,11 +1823,13 @@ function OrdersPage({
   mode,
   club,
   request,
+  onCatalogChanged,
   onToast,
 }: {
   mode: "purchases" | "sales";
   club: Club | null;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onCatalogChanged?: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1846,6 +1949,26 @@ function OrdersPage({
     }
   }
 
+  async function review(order: Order, rating: number) {
+    try {
+      await request(`/orders/${order.id}/review`, {
+        method: "POST",
+        body: JSON.stringify({ rating }),
+      });
+      await Promise.all([
+        loadOrders(),
+        onCatalogChanged ? onCatalogChanged() : Promise.resolve(),
+      ]);
+      onToast("Спасибо! Оценка сохранена");
+    } catch (reviewError) {
+      onToast(
+        reviewError instanceof Error
+          ? reviewError.message
+          : "Не удалось сохранить оценку",
+      );
+    }
+  }
+
   const shownOrders =
     mode === "sales"
       ? orders.filter((order) =>
@@ -1918,6 +2041,7 @@ function OrdersPage({
             }
             onAdvance={(status) => void advance(order, status)}
             onReport={() => setReportingOrder(order)}
+            onReview={(rating) => void review(order, rating)}
             onToast={onToast}
           />
         ))
@@ -1964,8 +2088,12 @@ function ReportSellerModal({
       <form
         className="report-modal"
         onClick={(event) => event.stopPropagation()}
+        onPointerDown={dismissKeyboard}
         onSubmit={async (event) => {
           event.preventDefault();
+          const active = document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+          window.Telegram?.WebApp?.hideKeyboard?.();
           setSaving(true);
           setError("");
           try {
@@ -2122,6 +2250,7 @@ function OrderCard({
   onToggleRequisites,
   onAdvance,
   onReport,
+  onReview,
   onToast,
 }: {
   order: Order;
@@ -2130,8 +2259,11 @@ function OrderCard({
   onToggleRequisites: () => void;
   onAdvance: (status: "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED") => void;
   onReport: () => void;
+  onReview: (rating: number) => void;
   onToast: (message: string) => void;
 }) {
+  const [ratingOpen, setRatingOpen] = useState(false);
+  const [selectedRating, setSelectedRating] = useState(0);
   const steps = [
     { status: "AWAITING_PAYMENT", label: "Ожидает оплаты", text: "Покупатель переводит деньги продавцу" },
     { status: "PAID", label: "Оплачено", text: "Продавец проверяет поступление" },
@@ -2230,6 +2362,36 @@ function OrderCard({
       {action && <button className="main-action" onClick={() => onAdvance(action.status)}>{action.label}</button>}
       {["AWAITING_PAYMENT", "PAID"].includes(order.status) && (
         <button className="outline-action cancel-order-action" onClick={() => onAdvance("CANCELLED")}>Отменить заказ</button>
+      )}
+      {mode === "purchases" && order.status === "COMPLETED" && (
+        <div className="order-rating">
+          {order.reviewRating ? (
+            <button className="outline-action rated-action" disabled>
+              <Star size={16} fill="currentColor" /> Оценка: {order.reviewRating} из 5
+            </button>
+          ) : ratingOpen ? (
+            <div className="rating-picker">
+              <span>Выберите оценку:</span>
+              <div>
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => setSelectedRating(value)}
+                    aria-label={`${value} из 5`}
+                  >
+                    <Star size={25} fill={value <= selectedRating ? "currentColor" : "none"} />
+                  </button>
+                ))}
+              </div>
+              <button className="main-action" disabled={!selectedRating} onClick={() => onReview(selectedRating)}>Подтвердить</button>
+            </div>
+          ) : (
+            <button className="outline-action" onClick={() => setRatingOpen(true)}>
+              <Star size={16} /> Оценить
+            </button>
+          )}
+        </div>
       )}
     </article>
   );
@@ -2572,7 +2734,10 @@ function ClubAdmin({
                 className="moderation-thumb actual-product-image"
                 style={product.images[0] ? { backgroundImage: `url("${product.images[0]}")` } : undefined}
               />
-              <p><b>{product.title}</b><small>{product.storeName} · Telegram ID продавца: {product.sellerTelegramId}</small></p>
+              <p>
+                <b>{product.title}</b>
+                <small>{product.storeName} · Продавец: {product.sellerName || "Имя не указано"}{product.sellerUsername ? ` · @${product.sellerUsername}` : ""} · Telegram ID: {product.sellerTelegramId}</small>
+              </p>
               <button
                 onClick={async () => {
                   try {
@@ -2804,7 +2969,7 @@ function SuperAdmin({
   onCategoriesChanged: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"categories" | "groups" | "settings" | "debts" | "users" | "moderation">("categories");
+  const [tab, setTab] = useState<"categories" | "groups" | "debts" | "users" | "moderation">("categories");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
@@ -2812,8 +2977,6 @@ function SuperAdmin({
   const [users, setUsers] = useState<Record<string, unknown>[]>([]);
   const [reports, setReports] = useState<Record<string, unknown>[]>([]);
   const [userQuery, setUserQuery] = useState("");
-  const [botCommissionInput, setBotCommissionInput] = useState("0");
-  const [debtLimitInput, setDebtLimitInput] = useState("0");
 
   useEffect(() => {
     void loadAdminData();
@@ -2823,18 +2986,13 @@ function SuperAdmin({
 
   async function loadAdminData() {
     try {
-      const [groupRows, settingsRow, debtRows, userRows, reportRows] = await Promise.all([
+      const [groupRows, debtRows, userRows, reportRows] = await Promise.all([
         request<Record<string, unknown>[]>("/admin/groups"),
-        request<Record<string, unknown>>("/admin/settings"),
         request<Record<string, unknown>[]>("/admin/debts"),
         request<Record<string, unknown>[]>("/admin/users"),
         request<Record<string, unknown>[]>("/admin/reports"),
       ]);
       setAdminGroups(groupRows.map(camelAdminGroup));
-      setBotCommissionInput(String(asNumber(settingsRow.bot_commission_percent)));
-      setDebtLimitInput(
-        String(Math.round(asNumber(settingsRow.default_debt_limit_kopecks) / 100)),
-      );
       setDebts(debtRows);
       setUsers(userRows);
       setReports(reportRows);
@@ -2849,11 +3007,10 @@ function SuperAdmin({
 
   return (
     <section className="inner-page admin-page">
-      <div className="page-title"><span className="section-kicker"><Crown size={13} /> PLATFORM OWNER</span><h1>Супер-админ</h1><p>Только реальные данные SQLite</p></div>
+      <div className="page-title"><span className="section-kicker"><Crown size={13} /> PLATFORM OWNER</span><h1>Супер-админ</h1><p>Только реальные данные из Базы данных</p></div>
       <div className="admin-tabs">
         <button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Категории</button>
-        <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы</button>
-        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Комиссия</button>
+        <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы и комиссии</button>
         <button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}>Долги</button>
         <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Пользователи</button>
         <button className={tab === "moderation" ? "active" : ""} onClick={() => setTab("moderation")}>
@@ -2896,7 +3053,7 @@ function SuperAdmin({
       )}
       {tab === "groups" && (
         <div className="admin-table-card">
-          <div className="table-heading"><div><h2>Подключённые группы</h2><p>{adminGroups.length} в SQLite</p></div></div>
+          <div className="table-heading"><div><h2>Группы, комиссии и лимиты</h2><p>{adminGroups.length} записей в Базе данных</p></div></div>
           {adminGroups.map((club) => (
             <AdminGroupRow
               key={club.id}
@@ -2910,35 +3067,6 @@ function SuperAdmin({
           ))}
           {!adminGroups.length && <div className="empty-inline">Группы ещё не подключены.</div>}
         </div>
-      )}
-      {tab === "settings" && (
-        <form
-          className="settings-card admin-settings-form"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            setSaving(true);
-            try {
-              await request("/admin/settings", {
-                method: "PUT",
-                body: JSON.stringify({
-                  botCommissionPercent: Number(botCommissionInput),
-                  debtLimitKopecks: Number(debtLimitInput) * 100,
-                }),
-              });
-              await loadAdminData();
-              onToast("Глобальные настройки сохранены");
-            } catch (settingsError) {
-              onToast(settingsError instanceof Error ? settingsError.message : "Не удалось сохранить настройки");
-            } finally {
-              setSaving(false);
-            }
-          }}
-        >
-          <div><h2>Комиссия платформы</h2><p className="settings-hint">Применяется ко всем продавцам и участвует в расчёте цены покупателя.</p></div>
-          <label><span>Комиссия бота, %</span><input type="number" min="0" max="30" step="0.1" value={botCommissionInput} onChange={(event) => setBotCommissionInput(event.target.value)} required /></label>
-          <label><span>Лимит долга продавца, ₽</span><input type="number" min="1" value={debtLimitInput} onChange={(event) => setDebtLimitInput(event.target.value)} required /></label>
-          <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
-        </form>
       )}
       {tab === "debts" && (
         <div className="admin-table-card">
@@ -3029,9 +3157,9 @@ function SuperAdmin({
             }[String(report.status)] || String(report.status);
             return (
               <article className={`report-review-card ${pending ? "pending" : ""}`} key={reportId}>
-                <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}</b><small>Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
+                <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}{report.reported_username ? ` · @${String(report.reported_username)}` : ""}</b><small>Telegram ID: {String(report.reported_telegram_id)} · Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
                 <p>{String(report.reason)}</p>
-                <small>От: {String(report.reporter_name || report.reporter_telegram_id)} · {new Date(String(report.created_at)).toLocaleString("ru-RU")}</small>
+                <small>От: {String(report.reporter_name || report.reporter_telegram_id)}{report.reporter_username ? ` · @${String(report.reporter_username)}` : ""} · Telegram ID: {String(report.reporter_telegram_id)} · {new Date(String(report.created_at)).toLocaleString("ru-RU")}</small>
                 {pending && (
                   <div className="report-review-actions">
                     <button
@@ -3083,6 +3211,9 @@ function AdminGroupRow({
   onSaved: () => Promise<void>;
 }) {
   const [commission, setCommission] = useState(String(club.commissionPercent));
+  const [debtLimit, setDebtLimit] = useState(
+    String(Math.round(club.debtLimitKopecks / 100)),
+  );
   const [active, setActive] = useState(club.active);
   const [saving, setSaving] = useState(false);
 
@@ -3097,6 +3228,7 @@ function AdminGroupRow({
             method: "PUT",
             body: JSON.stringify({
               commissionPercent: Number(commission),
+              debtLimitKopecks: Number(debtLimit) * 100,
               active,
             }),
           });
@@ -3109,6 +3241,7 @@ function AdminGroupRow({
       <span className="shop-avatar">{club.title.slice(0, 2).toUpperCase()}</span>
       <p><b>{club.title}</b><small>{club.productCount} товаров · {club.stores} магазинов · ID {club.telegramGroupId}</small></p>
       <label><span>Комиссия, %</span><input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} /></label>
+      <label><span>Лимит долга, ₽</span><input type="number" min="1" step="1" value={debtLimit} onChange={(event) => setDebtLimit(event.target.value)} /></label>
       <label className="active-check"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /><span>{active ? "Активна" : "Отключена"}</span></label>
       <button disabled={saving}>{saving ? "…" : "Сохранить"}</button>
     </form>

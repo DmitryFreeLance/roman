@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
   owner_telegram_id INTEGER NOT NULL,
   shop_thread_id INTEGER NOT NULL,
   commission_percent REAL NOT NULL DEFAULT 3.5,
+  debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -93,6 +94,13 @@ CREATE TABLE IF NOT EXISTS products (
 
 CREATE INDEX IF NOT EXISTS products_group_active_idx
   ON products(group_id, active, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS favorites (
+  user_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_telegram_id, product_id)
+);
 
 CREATE TABLE IF NOT EXISTS group_buys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

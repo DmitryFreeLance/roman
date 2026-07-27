@@ -5,7 +5,7 @@ Telegram-бот и Mini App для мультигруппового автомо
 - Mini App: `https://poznaysebya.site/redlineclub/`
 - API: `https://poznaysebya.site/redlineclub-api/`
 - Telegram: long polling (`getUpdates`), без webhook
-- Backend: Java 21, Spring Boot и SQLite
+- Backend: Java 21, Spring Boot и локальная База данных
 - Развёртывание: один Docker-образ и один контейнер
 
 Все настройки передаются непосредственно через `-e` в `docker run`.
@@ -63,7 +63,7 @@ docker exec redline-bot ls -lh /data/redline.db
 docker exec redline-bot ls -ld /data/uploads
 ```
 
-При старте приложение создаёт SQLite-таблицы, включает foreign keys и WAL,
+При старте приложение подготавливает таблицы Базы данных,
 удаляет прежний webhook и запускает `getUpdates`.
 
 Новая база не содержит демонстрационных пользователей, групп, категорий или
@@ -200,7 +200,7 @@ curl -s https://poznaysebya.site/redlineclub-api/actuator/health
 
 Webhook настраивать не нужно.
 
-## 4. Обновление без потери SQLite
+## 4. Обновление без потери Базы данных
 
 ```bash
 docker rm -f redline-bot
