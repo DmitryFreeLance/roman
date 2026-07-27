@@ -187,7 +187,11 @@ class MarketplaceServiceSqliteTest {
         assertThat(jdbc.queryForObject(
                 "SELECT commission_debt_kopecks FROM users WHERE telegram_id = ?",
                 Long.class, sellerId
-        )).isEqualTo(8_500L);
+        )).isEqualTo(14_500L);
+        assertThat(jdbc.queryForObject("""
+                SELECT commission_debt_kopecks FROM seller_group_finance
+                WHERE group_id = ? AND seller_telegram_id = ?
+                """, Long.class, groupId, sellerId)).isEqualTo(10_150L);
 
         marketplace.setSellerProductActive(sellerId, regularProductId, false);
         assertThat(marketplace.sellerProducts(sellerId, -100123L))
@@ -197,9 +201,11 @@ class MarketplaceServiceSqliteTest {
         marketplace.deleteSellerProduct(sellerId, regularProductId);
         assertThat(marketplace.sellerProducts(sellerId, -100123L)).hasSize(1);
 
-        marketplace.updateGlobalSettings(0, 50_000L);
+        marketplace.updateGlobalSettings(0, 50_000L, "СБП +7 900 000-00-00");
         assertThat(((Number) marketplace.globalSettings()
                 .get("bot_commission_percent")).doubleValue()).isZero();
+        assertThat(marketplace.globalSettings().get("payment_details"))
+                .isEqualTo("СБП +7 900 000-00-00");
 
         long reportId = marketplace.submitSellerReport(
                 firstBuyerId, orderId, "Продавец долго не отвечал"
@@ -252,10 +258,30 @@ class MarketplaceServiceSqliteTest {
                 });
 
         marketplace.setGlobalUserBan(sellerId, false);
+        assertThat(marketplace.catalog(-100123L)).isNotEmpty();
         assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isNotEmpty();
         assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isNotEmpty();
         marketplace.setGroupSellerBan(-100123L, sellerId, sellerId, true);
         assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isEmpty();
         assertThat(marketplace.groupBuyPurchases(firstBuyerId, -100123L)).isEmpty();
+        marketplace.setGroupSellerBan(-100123L, sellerId, sellerId, false);
+        assertThat(marketplace.catalog(-100123L)).isNotEmpty();
+
+        marketplace.updatePlatformSellerFinance(sellerId, 5.0, 10_000L);
+        assertThat(marketplace.catalog(-100123L)).isEmpty();
+        marketplace.updatePlatformSellerFinance(sellerId, 5.0, 50_000L);
+        assertThat(marketplace.catalog(-100123L)).isNotEmpty();
+
+        marketplace.updateGroupSellerFinance(
+                -100123L, sellerId, sellerId, 3.5, 10_000L
+        );
+        assertThat(marketplace.catalog(-100123L)).isEmpty();
+        marketplace.repayGroupSellerDebt(
+                -100123L, sellerId, sellerId, 10_150L
+        );
+        assertThat(marketplace.catalog(-100123L)).isNotEmpty();
+
+        marketplace.setSuperAdmin(firstBuyerId, true);
+        assertThat(marketplace.isSuperAdmin(firstBuyerId)).isTrue();
     }
 }

@@ -59,6 +59,19 @@ type Profile = {
   superAdmin: boolean;
 };
 
+type SellerFinance = {
+  platformCommissionPercent: number;
+  platformDebtKopecks: number;
+  platformDebtLimitKopecks: number;
+  platformPaymentDetails: string;
+  groupCommissionPercent: number;
+  groupDebtKopecks: number;
+  groupDebtLimitKopecks: number;
+  groupPaymentDetails: string;
+  platformBlocked: boolean;
+  groupBlocked: boolean;
+};
+
 type Club = {
   id: number;
   telegramGroupId: number;
@@ -242,6 +255,19 @@ const camelProfile = (row: Record<string, unknown>): Profile => ({
   commissionDebtKopecks: asNumber(row.commission_debt_kopecks),
   debtLimitKopecks: asNumber(row.debt_limit_kopecks),
   superAdmin: asBoolean(row.super_admin),
+});
+
+const camelSellerFinance = (row: Record<string, unknown>): SellerFinance => ({
+  platformCommissionPercent: asNumber(row.platform_commission_percent),
+  platformDebtKopecks: asNumber(row.platform_debt_kopecks),
+  platformDebtLimitKopecks: asNumber(row.platform_debt_limit_kopecks),
+  platformPaymentDetails: String(row.platform_payment_details || ""),
+  groupCommissionPercent: asNumber(row.group_commission_percent),
+  groupDebtKopecks: asNumber(row.group_debt_kopecks),
+  groupDebtLimitKopecks: asNumber(row.group_debt_limit_kopecks),
+  groupPaymentDetails: String(row.group_payment_details || ""),
+  platformBlocked: asBoolean(row.platform_blocked),
+  groupBlocked: asBoolean(row.group_blocked),
 });
 
 const camelClub = (row: Record<string, unknown>): Club => ({
@@ -429,6 +455,7 @@ export function RedlineApp() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [sellerFinance, setSellerFinance] = useState<SellerFinance | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -467,6 +494,9 @@ export function RedlineApp() {
   useEffect(() => {
     if (!selectedClub) return;
     void loadCatalog(selectedClub.telegramGroupId);
+    if (profile?.registered) {
+      void loadSellerFinance(selectedClub.telegramGroupId);
+    }
     // The catalog reloads only when the selected Telegram group changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClub]);
@@ -602,6 +632,34 @@ export function RedlineApp() {
     }
   }
 
+  async function loadSellerFinance(telegramGroupId: number) {
+    try {
+      const row = await request<Record<string, unknown>>(
+        `/me/finance/${telegramGroupId}`,
+      );
+      const finance = camelSellerFinance(row);
+      setSellerFinance(finance);
+      setProfile((current) =>
+        current
+          ? {
+              ...current,
+              sellerBlocked: finance.platformBlocked || finance.groupBlocked,
+              botCommissionPercent: finance.platformCommissionPercent,
+              commissionDebtKopecks: finance.platformDebtKopecks,
+              debtLimitKopecks: finance.platformDebtLimitKopecks,
+            }
+          : current,
+      );
+    } catch (financeError) {
+      setSellerFinance(null);
+      setToast(
+        financeError instanceof Error
+          ? financeError.message
+          : "Не удалось загрузить комиссии продавца",
+      );
+    }
+  }
+
   async function reloadCategories() {
     const rows = await request<Record<string, unknown>[]>("/categories");
     setCategories(rows.map(camelCategory));
@@ -667,6 +725,12 @@ export function RedlineApp() {
     haptic();
     setScreen(next);
     setDrawerOpen(false);
+    if (
+      selectedClub &&
+      ["listings", "sales", "create", "balance"].includes(next)
+    ) {
+      void loadSellerFinance(selectedClub.telegramGroupId);
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -805,9 +869,6 @@ export function RedlineApp() {
               ? {
                   ...current,
                   selectedGroupId: club.id,
-                  debtLimitKopecks: club.debtLimitKopecks,
-                  sellerBlocked:
-                    current.commissionDebtKopecks >= club.debtLimitKopecks,
                 }
               : current,
           );
@@ -855,10 +916,6 @@ export function RedlineApp() {
                       ? {
                           ...current,
                           selectedGroupId: nextClub.id,
-                          debtLimitKopecks: nextClub.debtLimitKopecks,
-                          sellerBlocked:
-                            current.commissionDebtKopecks >=
-                            nextClub.debtLimitKopecks,
                         }
                       : current,
                   );
@@ -1010,13 +1067,14 @@ export function RedlineApp() {
         )}
 
         {screen === "balance" && profile && (
-          <Balance profile={profile} />
+          <Balance profile={profile} finance={sellerFinance} />
         )}
 
         {screen === "create" && profile && (
           <CreateListing
             key={selectedClub?.telegramGroupId || "no-club"}
             profile={profile}
+            finance={sellerFinance}
             club={selectedClub}
             categories={categories}
             request={request}
@@ -1053,6 +1111,16 @@ export function RedlineApp() {
         {screen === "help" && <Help />}
 
       </div>
+
+      {sellerFinance &&
+        (sellerFinance.platformBlocked || sellerFinance.groupBlocked) &&
+        ["listings", "sales", "create", "balance"].includes(screen) && (
+          <SellerDebtModal
+            finance={sellerFinance}
+            clubTitle={selectedClub?.title || "текущий клуб"}
+            onClose={() => navigate("market")}
+          />
+        )}
 
       {notificationsOpen && (
         <NotificationsModal
@@ -2103,6 +2171,9 @@ function ReportSellerModal({
         className="report-modal"
         onSubmit={async (event) => {
           event.preventDefault();
+          const active = document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+          window.Telegram?.WebApp?.hideKeyboard?.();
           setSaving(true);
           setError("");
           try {
@@ -2408,12 +2479,14 @@ function OrderCard({
 
 function CreateListing({
   profile,
+  finance,
   club,
   categories,
   request,
   onCreated,
 }: {
   profile: Profile;
+  finance: SellerFinance | null;
   club: Club | null;
   categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -2456,7 +2529,7 @@ function CreateListing({
   }, [club?.telegramGroupId]);
 
   if (!club) return <EmptySection title="Новое объявление" text="Сначала подключите и выберите Telegram-группу." />;
-  if (profile.sellerBlocked) return <EmptySection title="Публикация недоступна" text="Достигнут лимит комиссионного долга. Обратитесь к администратору." />;
+  if (profile.sellerBlocked) return <EmptySection title="Публикация недоступна" text="Один из комиссионных долгов достиг лимита. Реквизиты и суммы указаны в окне оплаты." />;
   const activeClub = club;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -2521,7 +2594,12 @@ function CreateListing({
   const finalBuyerKopecks = Math.round(
     sellerRubles *
       100 *
-      (1 + profile.botCommissionPercent / 100 + activeClub.commissionPercent / 100),
+      (1 +
+        (finance?.platformCommissionPercent ??
+          profile.botCommissionPercent) /
+          100 +
+        (finance?.groupCommissionPercent ?? activeClub.commissionPercent) /
+          100),
   );
 
   return (
@@ -2589,7 +2667,7 @@ function CreateListing({
           <span>Конечная цена для покупателя</span>
           <b>{sellerRubles > 0 ? formatPrice(finalBuyerKopecks) : "—"}</b>
           <small>
-            Ваша цена {sellerRubles > 0 ? formatPrice(sellerRubles * 100) : "не указана"} + бот {profile.botCommissionPercent}% + клуб {activeClub.commissionPercent}%
+            Ваша цена {sellerRubles > 0 ? formatPrice(sellerRubles * 100) : "не указана"} + платформа {finance?.platformCommissionPercent ?? profile.botCommissionPercent}% + клуб {finance?.groupCommissionPercent ?? activeClub.commissionPercent}%
           </small>
         </div>
         {kind === "group" && (
@@ -2621,6 +2699,10 @@ function ClubAdmin({
 }) {
   const groupBuys = products.filter((product) => product.kind === "group");
   const [commission, setCommission] = useState(String(club.commissionPercent));
+  const [paymentDetails, setPaymentDetails] = useState("");
+  const [sellerFinances, setSellerFinances] = useState<
+    Record<string, unknown>[]
+  >([]);
   const [savingCommission, setSavingCommission] = useState(false);
   const [stats, setStats] = useState({
     products: products.length,
@@ -2631,10 +2713,15 @@ function ClubAdmin({
 
   useEffect(() => {
     let cancelled = false;
-    void request<Record<string, unknown>>(
-      `/groups/${club.telegramGroupId}/admin/stats`,
-    )
-      .then((row) => {
+    void Promise.all([
+      request<Record<string, unknown>>(
+        `/groups/${club.telegramGroupId}/admin/stats`,
+      ),
+      request<Record<string, unknown>[]>(
+        `/groups/${club.telegramGroupId}/admin/seller-finances`,
+      ),
+    ])
+      .then(([row, financeRows]) => {
         if (!cancelled) {
           setStats({
             products: asNumber(row.products),
@@ -2642,6 +2729,8 @@ function ClubAdmin({
             completedOrders: asNumber(row.completed_orders),
             groupCommissionKopecks: asNumber(row.group_commission_kopecks),
           });
+          setPaymentDetails(String(row.payment_details || ""));
+          setSellerFinances(financeRows);
         }
       })
       .catch((statsError) => {
@@ -2676,7 +2765,10 @@ function ClubAdmin({
           try {
             await request(`/groups/${club.telegramGroupId}/commission`, {
               method: "PUT",
-              body: JSON.stringify({ commissionPercent: Number(commission) }),
+              body: JSON.stringify({
+                commissionPercent: Number(commission),
+                paymentDetails,
+              }),
             });
             await onChanged();
             onToast("Комиссия клуба сохранена");
@@ -2708,10 +2800,45 @@ function ClubAdmin({
             required
           />
         </label>
+        <label>
+          <span>Реквизиты для оплаты долга клубу</span>
+          <textarea
+            value={paymentDetails}
+            onChange={(event) => setPaymentDetails(event.target.value)}
+            rows={3}
+            placeholder="СБП, номер карты, получатель и комментарий к платежу"
+            required
+          />
+        </label>
         <button className="main-action" disabled={savingCommission}>
-          {savingCommission ? "Сохраняем…" : "Сохранить комиссию"}
+          {savingCommission ? "Сохраняем…" : "Сохранить настройки"}
         </button>
       </form>
+      <div className="subsection-heading">
+        <h2>Комиссии и лимиты продавцов</h2>
+        <p>Настройки действуют отдельно для каждого магазина этого клуба.</p>
+      </div>
+      <div className="finance-admin-list">
+        {sellerFinances.map((seller) => (
+          <SellerFinanceAdminRow
+            key={asNumber(seller.telegram_id)}
+            seller={seller}
+            savePath={`/groups/${club.telegramGroupId}/admin/sellers/${asNumber(seller.telegram_id)}/finance`}
+            repayPath={`/groups/${club.telegramGroupId}/admin/sellers/${asNumber(seller.telegram_id)}/repay`}
+            request={request}
+            onSaved={async (message) => {
+              const rows = await request<Record<string, unknown>[]>(
+                `/groups/${club.telegramGroupId}/admin/seller-finances`,
+              );
+              setSellerFinances(rows);
+              onToast(message);
+            }}
+          />
+        ))}
+        {!sellerFinances.length && (
+          <div className="empty-inline">Продавцов в клубе пока нет.</div>
+        )}
+      </div>
       <div className="subsection-heading">
         <h2>Групповые закупки</h2>
         <p>Фиксация цены, подтверждение оплаты, контакты и сроки поставки.</p>
@@ -2790,6 +2917,86 @@ function ClubAdmin({
         <div className="empty-inline">Активных объявлений нет.</div>
       )}
     </section>
+  );
+}
+
+function SellerFinanceAdminRow({
+  seller,
+  savePath,
+  repayPath,
+  request,
+  onSaved,
+}: {
+  seller: Record<string, unknown>;
+  savePath: string;
+  repayPath: string;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onSaved: (message: string) => Promise<void>;
+}) {
+  const sellerId = asNumber(seller.telegram_id);
+  const sellerName = String(
+    seller.seller_name ||
+      [seller.first_name, seller.last_name].filter(Boolean).join(" ") ||
+      `ID ${sellerId}`,
+  );
+  const debt = asNumber(seller.commission_debt_kopecks);
+  const [commission, setCommission] = useState(
+    String(asNumber(seller.commission_percent)),
+  );
+  const [limit, setLimit] = useState(
+    String(Math.round(asNumber(seller.debt_limit_kopecks) / 100)),
+  );
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <form
+      className={`seller-finance-admin-row ${asBoolean(seller.seller_blocked) ? "blocked" : ""}`}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await request(savePath, {
+            method: "PUT",
+            body: JSON.stringify({
+              commissionPercent: Number(commission),
+              debtLimitKopecks: Number(limit) * 100,
+            }),
+          });
+          await onSaved("Настройки продавца сохранены");
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <div className="seller-finance-identity">
+        <span className="shop-avatar">{sellerName.slice(0, 2).toUpperCase()}</span>
+        <p><b>{sellerName}</b><small>{seller.store_name ? `${String(seller.store_name)} · ` : ""}ID {sellerId}</small></p>
+      </div>
+      <label><span>Комиссия, %</span><input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} required /></label>
+      <label><span>Лимит, ₽</span><input type="number" min="1" step="1" value={limit} onChange={(event) => setLimit(event.target.value)} required /></label>
+      <div className="seller-finance-debt"><span>Текущий долг</span><b>{formatPrice(debt)}</b></div>
+      <div className="seller-finance-actions">
+        <button type="submit" disabled={saving}>{saving ? "…" : "Сохранить"}</button>
+        <button
+          type="button"
+          disabled={saving || debt <= 0}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await request(repayPath, {
+                method: "POST",
+                body: JSON.stringify({ amountKopecks: debt }),
+              });
+              await onSaved("Оплата подтверждена, долг погашен");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          Подтвердить оплату
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -2978,7 +3185,7 @@ function SuperAdmin({
   onCategoriesChanged: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"categories" | "groups" | "debts" | "users" | "moderation">("categories");
+  const [tab, setTab] = useState<"settings" | "categories" | "groups" | "debts" | "users" | "moderation">("settings");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
@@ -2986,6 +3193,11 @@ function SuperAdmin({
   const [users, setUsers] = useState<Record<string, unknown>[]>([]);
   const [reports, setReports] = useState<Record<string, unknown>[]>([]);
   const [userQuery, setUserQuery] = useState("");
+  const [globalSettings, setGlobalSettings] = useState({
+    commission: "",
+    limitRubles: "",
+    paymentDetails: "",
+  });
 
   useEffect(() => {
     void loadAdminData();
@@ -2995,16 +3207,24 @@ function SuperAdmin({
 
   async function loadAdminData() {
     try {
-      const [groupRows, debtRows, userRows, reportRows] = await Promise.all([
+      const [groupRows, debtRows, userRows, reportRows, settingsRow] = await Promise.all([
         request<Record<string, unknown>[]>("/admin/groups"),
         request<Record<string, unknown>[]>("/admin/debts"),
         request<Record<string, unknown>[]>("/admin/users"),
         request<Record<string, unknown>[]>("/admin/reports"),
+        request<Record<string, unknown>>("/admin/settings"),
       ]);
       setAdminGroups(groupRows.map(camelAdminGroup));
       setDebts(debtRows);
       setUsers(userRows);
       setReports(reportRows);
+      setGlobalSettings({
+        commission: String(asNumber(settingsRow.bot_commission_percent)),
+        limitRubles: String(
+          Math.round(asNumber(settingsRow.default_debt_limit_kopecks) / 100),
+        ),
+        paymentDetails: String(settingsRow.payment_details || ""),
+      });
     } catch (adminError) {
       onToast(
         adminError instanceof Error
@@ -3018,6 +3238,7 @@ function SuperAdmin({
     <section className="inner-page admin-page">
       <div className="page-title"><span className="section-kicker"><Crown size={13} /> PLATFORM OWNER</span><h1>Супер-админ</h1><p>Только реальные данные из Базы данных</p></div>
       <div className="admin-tabs">
+        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Платформа</button>
         <button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Категории</button>
         <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы и комиссии</button>
         <button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}>Долги</button>
@@ -3029,6 +3250,35 @@ function SuperAdmin({
           )}
         </button>
       </div>
+      {tab === "settings" && (
+        <form
+          className="settings-card admin-settings-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setSaving(true);
+            try {
+              await request("/admin/settings", {
+                method: "PUT",
+                body: JSON.stringify({
+                  botCommissionPercent: Number(globalSettings.commission),
+                  debtLimitKopecks: Number(globalSettings.limitRubles) * 100,
+                  paymentDetails: globalSettings.paymentDetails,
+                }),
+              });
+              await loadAdminData();
+              onToast("Настройки платформы сохранены");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          <div><h2>Комиссия платформы</h2><p className="settings-hint">Значения по умолчанию применяются к новым продавцам. Индивидуальные значения задаются во вкладке «Долги».</p></div>
+          <label><span>Комиссия платформы, %</span><input type="number" min="0" max="30" step="0.1" value={globalSettings.commission} onChange={(event) => setGlobalSettings((current) => ({ ...current, commission: event.target.value }))} required /></label>
+          <label><span>Лимит долга нового продавца, ₽</span><input type="number" min="1" step="1" value={globalSettings.limitRubles} onChange={(event) => setGlobalSettings((current) => ({ ...current, limitRubles: event.target.value }))} required /></label>
+          <label><span>Реквизиты супер-администратора</span><textarea rows={4} value={globalSettings.paymentDetails} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentDetails: event.target.value }))} placeholder="СБП, номер карты, получатель и назначение платежа" required /></label>
+          <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
+        </form>
+      )}
       {tab === "categories" && (
         <div className="settings-card">
           <h2>Категории товаров</h2>
@@ -3078,38 +3328,32 @@ function SuperAdmin({
         </div>
       )}
       {tab === "debts" && (
-        <div className="admin-table-card">
-          <div className="table-heading"><div><h2>Комиссионные долги</h2><p>Фактические данные продавцов</p></div></div>
+        <div className="finance-admin-list">
+          <div className="table-heading"><div><h2>Долги продавцов платформе</h2><p>Отдельны от долгов перед администраторами клубов. Здесь можно настроить комиссию и лимит каждого продавца.</p></div></div>
           {debts.map((debt) => {
             const sellerId = asNumber(debt.telegram_id);
-            const amount = asNumber(debt.commission_debt_kopecks);
-            const sellerName = [debt.first_name, debt.last_name].filter(Boolean).join(" ") || `ID ${sellerId}`;
             return (
-              <div className={`debt-row ${asBoolean(debt.seller_blocked) ? "blocked" : ""}`} key={sellerId}>
-                <span className="shop-avatar">{sellerName.slice(0, 2).toUpperCase()}</span>
-                <p><b>{sellerName}</b><small>{debt.username ? `@${String(debt.username)}` : `Telegram ID: ${sellerId}`}</small></p>
-                <strong>{formatPrice(amount)}</strong>
-                <em>{asBoolean(debt.seller_blocked) ? "ЗАБЛОКИРОВАН" : "АКТИВЕН"}</em>
-                <button
-                  onClick={async () => {
-                    try {
-                      await request(`/admin/debts/${sellerId}/repay`, {
-                        method: "POST",
-                        body: JSON.stringify({ amountKopecks: amount }),
-                      });
-                      await loadAdminData();
-                      onToast("Долг погашен");
-                    } catch (repayError) {
-                      onToast(repayError instanceof Error ? repayError.message : "Не удалось погасить долг");
-                    }
-                  }}
-                >
-                  Погасить
-                </button>
-              </div>
+              <SellerFinanceAdminRow
+                key={sellerId}
+                seller={{
+                  ...debt,
+                  seller_name:
+                    [debt.first_name, debt.last_name].filter(Boolean).join(" ") ||
+                    `ID ${sellerId}`,
+                  commission_percent: debt.bot_commission_percent,
+                  store_name: debt.club_titles,
+                }}
+                savePath={`/admin/debts/${sellerId}/settings`}
+                repayPath={`/admin/debts/${sellerId}/repay`}
+                request={request}
+                onSaved={async (message) => {
+                  await loadAdminData();
+                  onToast(message);
+                }}
+              />
             );
           })}
-          {!debts.length && <div className="empty-inline">Задолженностей нет.</div>}
+          {!debts.length && <div className="empty-inline">Продавцов с магазинами пока нет.</div>}
         </div>
       )}
       {tab === "users" && (
@@ -3126,27 +3370,49 @@ function SuperAdmin({
                 const telegramId = asNumber(user.telegram_id);
                 const userName = String(user.display_name || [user.first_name, user.last_name].filter(Boolean).join(" ") || `ID ${telegramId}`);
                 const banned = asBoolean(user.globally_banned);
+                const superAdmin = asBoolean(user.super_admin);
                 return (
                   <article className={`admin-user-card ${banned ? "banned" : ""}`} key={telegramId}>
                     <span className="profile-avatar">{userName.slice(0, 2).toUpperCase()}</span>
                     <div><b>{userName}</b><small>{user.username ? `@${String(user.username)}` : `Telegram ID: ${telegramId}`}</small><p>{asNumber(user.order_count)} заказов · {asNumber(user.store_count)} магазинов</p></div>
-                    <button
-                      className={banned ? "unban-action" : "ban-action"}
-                      onClick={async () => {
-                        try {
-                          await request(`/admin/users/${telegramId}/ban`, {
-                            method: "PUT",
-                            body: JSON.stringify({ banned: !banned }),
-                          });
-                          await loadAdminData();
-                          onToast(banned ? "Блокировка снята" : "Пользователь заблокирован");
-                        } catch (banError) {
-                          onToast(banError instanceof Error ? banError.message : "Не удалось изменить блокировку");
-                        }
-                      }}
-                    >
-                      {banned ? "Разблокировать" : "Бан"}
-                    </button>
+                    <div className="admin-user-actions">
+                      <button
+                        className={superAdmin ? "super-admin-active" : ""}
+                        disabled={superAdmin}
+                        onClick={async () => {
+                          try {
+                            await request(`/admin/users/${telegramId}/super-admin`, {
+                              method: "PUT",
+                              body: JSON.stringify({ enabled: true }),
+                            });
+                            await loadAdminData();
+                            onToast("Пользователь назначен супер-администратором");
+                          } catch (roleError) {
+                            onToast(roleError instanceof Error ? roleError.message : "Не удалось выдать права");
+                          }
+                        }}
+                      >
+                        {superAdmin ? "Супер-админ" : "Сделать супер-админом"}
+                      </button>
+                      <button
+                        className={banned ? "unban-action" : "ban-action"}
+                        disabled={superAdmin}
+                        onClick={async () => {
+                          try {
+                            await request(`/admin/users/${telegramId}/ban`, {
+                              method: "PUT",
+                              body: JSON.stringify({ banned: !banned }),
+                            });
+                            await loadAdminData();
+                            onToast(banned ? "Блокировка снята" : "Пользователь заблокирован");
+                          } catch (banError) {
+                            onToast(banError instanceof Error ? banError.message : "Не удалось изменить блокировку");
+                          }
+                        }}
+                      >
+                        {banned ? "Разблокировать" : "Бан"}
+                      </button>
+                    </div>
                   </article>
                 );
               })}
@@ -3257,20 +3523,86 @@ function AdminGroupRow({
   );
 }
 
-function Balance({ profile }: { profile: Profile }) {
-  const percent = profile.debtLimitKopecks
-    ? Math.min(100, Math.round((profile.commissionDebtKopecks / profile.debtLimitKopecks) * 100))
+function Balance({
+  profile,
+  finance,
+}: {
+  profile: Profile;
+  finance: SellerFinance | null;
+}) {
+  const platformDebt =
+    finance?.platformDebtKopecks ?? profile.commissionDebtKopecks;
+  const platformLimit =
+    finance?.platformDebtLimitKopecks ?? profile.debtLimitKopecks;
+  const platformPercent = platformLimit
+    ? Math.min(100, Math.round((platformDebt / platformLimit) * 100))
+    : 0;
+  const groupPercent = finance?.groupDebtLimitKopecks
+    ? Math.min(
+        100,
+        Math.round(
+          (finance.groupDebtKopecks / finance.groupDebtLimitKopecks) * 100,
+        ),
+      )
     : 0;
   return (
     <section className="inner-page narrow-page">
       <div className="page-title"><span className="section-kicker">SELLER FINANCE</span><h1>Баланс и комиссии</h1><p>Фактические данные вашего профиля</p></div>
-      <div className={`debt-card ${profile.sellerBlocked ? "danger" : ""}`}>
-        <span>Комиссионный долг</span>
-        <strong>{formatPrice(profile.commissionDebtKopecks)}</strong>
-        <div><i style={{ width: `${percent}%` }} /></div>
-        <p>Лимит блокировки: {formatPrice(profile.debtLimitKopecks)}</p>
+      <div className={`debt-card ${finance?.platformBlocked ? "danger" : ""}`}>
+        <span>Долг платформе · комиссия {finance?.platformCommissionPercent ?? profile.botCommissionPercent}%</span>
+        <strong>{formatPrice(platformDebt)}</strong>
+        <div><i style={{ width: `${platformPercent}%` }} /></div>
+        <p>Лимит блокировки: {formatPrice(platformLimit)}</p>
       </div>
+      {finance && (
+        <div className={`debt-card ${finance.groupBlocked ? "danger" : ""}`}>
+          <span>Долг клубу · комиссия {finance.groupCommissionPercent}%</span>
+          <strong>{formatPrice(finance.groupDebtKopecks)}</strong>
+          <div><i style={{ width: `${groupPercent}%` }} /></div>
+          <p>Лимит блокировки: {formatPrice(finance.groupDebtLimitKopecks)}</p>
+        </div>
+      )}
     </section>
+  );
+}
+
+function SellerDebtModal({
+  finance,
+  clubTitle,
+  onClose,
+}: {
+  finance: SellerFinance;
+  clubTitle: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop seller-debt-backdrop">
+      <section className="report-modal seller-debt-modal" role="dialog" aria-modal="true">
+        <div className="report-modal-icon"><WalletCards size={24} /></div>
+        <h2>Продажи приостановлены</h2>
+        <p>Объявления скрыты до подтверждения оплаты. Покупать товары других продавцов можно.</p>
+        <div className="seller-debt-breakdown">
+          <article className={finance.platformBlocked ? "blocked" : ""}>
+            <span>ПЛАТФОРМА</span>
+            <b>{formatPrice(finance.platformDebtKopecks)}</b>
+            <small>Лимит {formatPrice(finance.platformDebtLimitKopecks)} · комиссия {finance.platformCommissionPercent}%</small>
+            {finance.platformBlocked && (
+              <p><strong>Реквизиты супер-администратора</strong>{finance.platformPaymentDetails || "Реквизиты пока не указаны. Свяжитесь с супер-администратором."}</p>
+            )}
+          </article>
+          <article className={finance.groupBlocked ? "blocked" : ""}>
+            <span>КЛУБ «{clubTitle}»</span>
+            <b>{formatPrice(finance.groupDebtKopecks)}</b>
+            <small>Лимит {formatPrice(finance.groupDebtLimitKopecks)} · комиссия {finance.groupCommissionPercent}%</small>
+            {finance.groupBlocked && (
+              <p><strong>Реквизиты администратора клуба</strong>{finance.groupPaymentDetails || "Реквизиты пока не указаны. Свяжитесь с администратором клуба."}</p>
+            )}
+          </article>
+        </div>
+        <p className="seller-debt-note">Переведите сумму долга, затем дождитесь подтверждения получателя. После погашения обоих достигнутых лимитов объявления вернутся автоматически.</p>
+        <button className="main-action" onClick={onClose}>Понятно, перейти в маркет</button>
+      </section>
+    </div>
   );
 }
 

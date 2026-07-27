@@ -1,6 +1,5 @@
 package club.redline.web;
 
-import club.redline.config.RedlineProperties;
 import club.redline.security.TelegramInitDataVerifier;
 import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import club.redline.service.MarketplaceService;
@@ -27,14 +26,12 @@ import java.util.Map;
 public class MarketplaceController {
     private final MarketplaceService marketplace;
     private final TelegramInitDataVerifier verifier;
-    private final RedlineProperties properties;
     private final ImageStorageService images;
 
     public MarketplaceController(MarketplaceService marketplace, TelegramInitDataVerifier verifier,
-                                 RedlineProperties properties, ImageStorageService images) {
+                                 ImageStorageService images) {
         this.marketplace = marketplace;
         this.verifier = verifier;
-        this.properties = properties;
         this.images = images;
     }
 
@@ -45,9 +42,17 @@ public class MarketplaceController {
         Map<String, Object> profile = new java.util.LinkedHashMap<>(
                 marketplace.profile(user.id())
         );
-        profile.put("super_admin",
-                user.id() == properties.marketplace().superAdminTelegramId());
+        profile.put("super_admin", marketplace.isSuperAdmin(user.id()));
         return profile;
+    }
+
+    @GetMapping("/me/finance/{telegramGroupId}")
+    public Map<String, Object> sellerFinance(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.sellerFinance(
+                registered(initData).id(), telegramGroupId
+        );
     }
 
     @PostMapping("/register")
@@ -331,7 +336,8 @@ public class MarketplaceController {
                                       @PathVariable long telegramGroupId,
                                       @Valid @RequestBody GroupCommissionRequest request) {
         marketplace.updateGroupCommission(
-                telegramGroupId, registered(initData).id(), request.commissionPercent()
+                telegramGroupId, registered(initData).id(),
+                request.commissionPercent(), request.paymentDetails()
         );
     }
 
@@ -341,6 +347,41 @@ public class MarketplaceController {
             @PathVariable long telegramGroupId) {
         return marketplace.groupAdminStats(
                 telegramGroupId, registered(initData).id()
+        );
+    }
+
+    @GetMapping("/groups/{telegramGroupId}/admin/seller-finances")
+    public List<Map<String, Object>> groupSellerFinances(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.groupSellerFinances(
+                telegramGroupId, registered(initData).id()
+        );
+    }
+
+    @PutMapping("/groups/{telegramGroupId}/admin/sellers/{sellerTelegramId}/finance")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateGroupSellerFinance(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId,
+            @PathVariable long sellerTelegramId,
+            @Valid @RequestBody SellerFinanceRequest request) {
+        marketplace.updateGroupSellerFinance(
+                telegramGroupId, registered(initData).id(), sellerTelegramId,
+                request.commissionPercent(), request.debtLimitKopecks()
+        );
+    }
+
+    @PostMapping("/groups/{telegramGroupId}/admin/sellers/{sellerTelegramId}/repay")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void repayGroupSellerDebt(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId,
+            @PathVariable long sellerTelegramId,
+            @Valid @RequestBody RepayDebtRequest request) {
+        marketplace.repayGroupSellerDebt(
+                telegramGroupId, registered(initData).id(), sellerTelegramId,
+                request.amountKopecks()
         );
     }
 
@@ -384,6 +425,19 @@ public class MarketplaceController {
         marketplace.repayDebt(sellerTelegramId, request.amountKopecks(), admin.id());
     }
 
+    @PutMapping("/admin/debts/{sellerTelegramId}/settings")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updatePlatformSellerFinance(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long sellerTelegramId,
+            @Valid @RequestBody SellerFinanceRequest request) {
+        requireSuperAdmin(initData);
+        marketplace.updatePlatformSellerFinance(
+                sellerTelegramId, request.commissionPercent(),
+                request.debtLimitKopecks()
+        );
+    }
+
     @GetMapping("/admin/groups")
     public List<Map<String, Object>> groups(
             @RequestHeader("X-Telegram-Init-Data") String initData) {
@@ -407,6 +461,16 @@ public class MarketplaceController {
             @RequestBody UserBanRequest request) {
         requireSuperAdmin(initData);
         marketplace.setGlobalUserBan(telegramId, request.banned());
+    }
+
+    @PutMapping("/admin/users/{telegramId}/super-admin")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setSuperAdmin(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramId,
+            @RequestBody SuperAdminRequest request) {
+        requireSuperAdmin(initData);
+        marketplace.setSuperAdmin(telegramId, request.enabled());
     }
 
     @GetMapping("/admin/reports")
@@ -453,7 +517,8 @@ public class MarketplaceController {
                                @Valid @RequestBody GlobalSettingsRequest request) {
         requireSuperAdmin(initData);
         marketplace.updateGlobalSettings(
-                request.botCommissionPercent(), request.debtLimitKopecks()
+                request.botCommissionPercent(), request.debtLimitKopecks(),
+                request.paymentDetails()
         );
     }
 
@@ -483,7 +548,7 @@ public class MarketplaceController {
 
     private TelegramUser requireSuperAdmin(String initData) {
         TelegramUser user = registered(initData);
-        if (user.id() != properties.marketplace().superAdminTelegramId()) {
+        if (!marketplace.isSuperAdmin(user.id())) {
             throw new IllegalArgumentException("Super-admin access required");
         }
         return user;
@@ -545,14 +610,19 @@ public class MarketplaceController {
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
-    public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent) {}
+    public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent,
+                                         @NotBlank String paymentDetails) {}
     public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
                                     @Positive long debtLimitKopecks,
                                     boolean active) {}
     public record SellerBanRequest(boolean banned) {}
     public record UserBanRequest(boolean banned) {}
+    public record SuperAdminRequest(boolean enabled) {}
     public record ResolveReportRequest(@NotBlank String action) {}
     public record RepayDebtRequest(@Positive long amountKopecks) {}
+    public record SellerFinanceRequest(@Min(0) @Max(30) double commissionPercent,
+                                       @Positive long debtLimitKopecks) {}
     public record GlobalSettingsRequest(@Min(0) @Max(30) double botCommissionPercent,
-                                        @Positive long debtLimitKopecks) {}
+                                        @Positive long debtLimitKopecks,
+                                        @NotBlank String paymentDetails) {}
 }

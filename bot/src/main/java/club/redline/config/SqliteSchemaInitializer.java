@@ -37,6 +37,7 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         ensureStoreColumns(jdbc);
         ensureProductColumns(jdbc);
         ensureGroupColumns(jdbc);
+        ensureFinancialColumns(jdbc);
 
         RedlineProperties.Marketplace marketplace = properties.marketplace();
         jdbc.update("""
@@ -64,6 +65,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         }
         if (!columns.contains("selected_group_id")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN selected_group_id INTEGER");
+        }
+        if (!columns.contains("super_admin")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN super_admin INTEGER NOT NULL DEFAULT 0");
         }
     }
 
@@ -105,6 +109,32 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
                     )
                     """);
         }
+        if (!columns.contains("payment_details")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_details TEXT NOT NULL DEFAULT ''");
+        }
+    }
+
+    private void ensureFinancialColumns(JdbcTemplate jdbc) {
+        Set<String> platformColumns = columns(jdbc, "platform_settings");
+        if (!platformColumns.contains("payment_details")) {
+            jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_details TEXT NOT NULL DEFAULT ''");
+        }
+        Set<String> orderColumns = columns(jdbc, "orders");
+        if (!orderColumns.contains("platform_commission_kopecks")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN platform_commission_kopecks INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!orderColumns.contains("group_commission_kopecks")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN group_commission_kopecks INTEGER NOT NULL DEFAULT 0");
+        }
+        jdbc.update("""
+                INSERT INTO seller_group_finance
+                  (group_id, seller_telegram_id, commission_percent, debt_limit_kopecks)
+                SELECT st.group_id, st.seller_telegram_id,
+                       g.commission_percent, g.debt_limit_kopecks
+                FROM stores st
+                JOIN telegram_groups g ON g.id = st.group_id
+                ON CONFLICT (group_id, seller_telegram_id) DO NOTHING
+                """);
     }
 
     private Set<String> columns(JdbcTemplate jdbc, String table) {

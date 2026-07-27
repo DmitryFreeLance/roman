@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   singleton INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
   bot_commission_percent REAL NOT NULL DEFAULT 5.0,
   default_debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
+  payment_details TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
   debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
   seller_blocked INTEGER NOT NULL DEFAULT 0 CHECK (seller_blocked IN (0, 1)),
   globally_banned INTEGER NOT NULL DEFAULT 0 CHECK (globally_banned IN (0, 1)),
+  super_admin INTEGER NOT NULL DEFAULT 0 CHECK (super_admin IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
   shop_thread_id INTEGER NOT NULL,
   commission_percent REAL NOT NULL DEFAULT 3.5,
   debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
+  payment_details TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -71,6 +74,17 @@ CREATE TABLE IF NOT EXISTS group_seller_bans (
   seller_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
   reason TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (group_id, seller_telegram_id)
+);
+
+CREATE TABLE IF NOT EXISTS seller_group_finance (
+  group_id INTEGER NOT NULL REFERENCES telegram_groups(id),
+  seller_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  commission_percent REAL NOT NULL DEFAULT 3.5,
+  commission_debt_kopecks INTEGER NOT NULL DEFAULT 0,
+  debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (group_id, seller_telegram_id)
 );
 
@@ -146,6 +160,8 @@ CREATE TABLE IF NOT EXISTS orders (
   seller_price_kopecks INTEGER NOT NULL,
   buyer_price_kopecks INTEGER NOT NULL,
   commission_kopecks INTEGER NOT NULL,
+  platform_commission_kopecks INTEGER NOT NULL DEFAULT 0,
+  group_commission_kopecks INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'AWAITING_PAYMENT'
     CHECK (status IN ('AWAITING_PAYMENT', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -215,3 +231,18 @@ CREATE TABLE IF NOT EXISTS commission_ledger (
 
 CREATE INDEX IF NOT EXISTS commission_ledger_seller_idx
   ON commission_ledger(seller_telegram_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS group_commission_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL REFERENCES telegram_groups(id),
+  seller_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  order_id INTEGER REFERENCES orders(id),
+  group_buy_id INTEGER REFERENCES group_buys(id),
+  amount_kopecks INTEGER NOT NULL,
+  entry_type TEXT NOT NULL CHECK (entry_type IN ('ACCRUAL', 'REPAYMENT', 'WRITE_OFF')),
+  recorded_by_telegram_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS group_commission_ledger_seller_idx
+  ON group_commission_ledger(group_id, seller_telegram_id, created_at DESC);

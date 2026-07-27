@@ -75,7 +75,8 @@ public class MarketplaceService {
                 SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
                        p.seller_price_kopecks,
                        CAST(ROUND(p.seller_price_kopecks *
-                         (1 + s.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
+                         (1 + s.bot_commission_percent / 100
+                          + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, st.id AS store_id, st.name AS store_name,
                        st.seller_telegram_id, s.username AS seller_username,
@@ -98,16 +99,23 @@ public class MarketplaceService {
                 JOIN stores st ON st.id = p.store_id
                 JOIN users s ON s.telegram_id = st.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
                 LEFT JOIN reviews r ON r.product_id = p.id
                 LEFT JOIN group_buys gb ON gb.product_id = p.id
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
                 WHERE g.telegram_group_id = ? AND p.active = 1 AND p.deleted = 0
                   AND s.globally_banned = 0
+                  AND s.commission_debt_kopecks < s.debt_limit_kopecks
+                  AND COALESCE(sgf.commission_debt_kopecks, 0)
+                      < COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
                   AND NOT EXISTS (
                     SELECT 1 FROM group_seller_bans b
                     WHERE b.group_id = g.id AND b.seller_telegram_id = st.seller_telegram_id
                   )
                 GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
+                         sgf.commission_percent,
                          st.id, st.name, s.username, s.display_name,
                          s.first_name, s.last_name,
                          gb.target_count, gb.status, gb.payment_deadline
@@ -121,7 +129,8 @@ public class MarketplaceService {
                 SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
                        p.seller_price_kopecks,
                        CAST(ROUND(p.seller_price_kopecks *
-                         (1 + u.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
+                         (1 + u.bot_commission_percent / 100
+                          + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, p.active, st.id AS store_id, st.name AS store_name,
                        st.seller_telegram_id,
@@ -136,6 +145,9 @@ public class MarketplaceService {
                 JOIN stores st ON st.id = p.store_id
                 JOIN users u ON u.telegram_id = st.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
                 LEFT JOIN group_buys gb ON gb.product_id = p.id
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
                 LEFT JOIN orders o ON o.product_id = p.id
@@ -143,6 +155,7 @@ public class MarketplaceService {
                 WHERE g.telegram_group_id = ? AND st.seller_telegram_id = ?
                   AND p.deleted = 0
                 GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
+                         sgf.commission_percent,
                          st.id, st.name, gb.id, gb.target_count, gb.status
                 ORDER BY p.created_at DESC
                 """, telegramGroupId, sellerTelegramId);
@@ -245,6 +258,7 @@ public class MarketplaceService {
 
     @Transactional
     public long createStore(long sellerTelegramId, NewStore input) {
+        ensureSellerGroupFinance(input.groupId(), sellerTelegramId);
         Long storeId = jdbc.queryForObject("""
                 INSERT INTO stores
                   (group_id, seller_telegram_id, name, description, payment_details)
@@ -279,17 +293,50 @@ public class MarketplaceService {
         return jdbc.queryForMap("""
                 SELECT u.telegram_id, u.username, u.first_name, u.last_name,
                        u.display_name, u.phone, u.selected_group_id, u.registered,
-                       (u.commission_debt_kopecks >= COALESCE(
-                         g.debt_limit_kopecks, u.debt_limit_kopecks
-                       )) AS seller_blocked,
+                       (u.commission_debt_kopecks >= u.debt_limit_kopecks
+                        OR COALESCE(sgf.commission_debt_kopecks, 0)
+                           >= COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
+                       ) AS seller_blocked,
                        u.globally_banned, u.bot_commission_percent,
                        u.commission_debt_kopecks,
-                       COALESCE(g.debt_limit_kopecks, u.debt_limit_kopecks)
-                         AS debt_limit_kopecks
+                       u.debt_limit_kopecks,
+                       u.super_admin
                 FROM users u
                 LEFT JOIN telegram_groups g ON g.id = u.selected_group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = u.telegram_id
                 WHERE u.telegram_id = ?
                 """, telegramId);
+    }
+
+    public Map<String, Object> sellerFinance(long sellerTelegramId,
+                                             long telegramGroupId) {
+        return jdbc.queryForMap("""
+                SELECT u.bot_commission_percent AS platform_commission_percent,
+                       u.commission_debt_kopecks AS platform_debt_kopecks,
+                       u.debt_limit_kopecks AS platform_debt_limit_kopecks,
+                       ps.payment_details AS platform_payment_details,
+                       COALESCE(sgf.commission_percent, g.commission_percent)
+                         AS group_commission_percent,
+                       COALESCE(sgf.commission_debt_kopecks, 0)
+                         AS group_debt_kopecks,
+                       COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
+                         AS group_debt_limit_kopecks,
+                       g.payment_details AS group_payment_details,
+                       (u.commission_debt_kopecks >= u.debt_limit_kopecks)
+                         AS platform_blocked,
+                       (COALESCE(sgf.commission_debt_kopecks, 0)
+                         >= COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks))
+                         AS group_blocked
+                FROM users u
+                JOIN telegram_groups g ON g.telegram_group_id = ?
+                JOIN platform_settings ps ON ps.singleton = 1
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = u.telegram_id
+                WHERE u.telegram_id = ?
+                """, telegramGroupId, sellerTelegramId);
     }
 
     @Transactional
@@ -473,15 +520,19 @@ public class MarketplaceService {
 
     @Transactional
     public void openPayment(long groupBuyId, long sellerTelegramId, long finalPriceKopecks, int hours) {
-        assertGroupBuySeller(groupBuyId, sellerTelegramId);
+        assertGroupBuySellerCanTrade(groupBuyId, sellerTelegramId);
         Map<String, Object> pricing = jdbc.queryForMap("""
                 SELECT p.id AS product_id, u.bot_commission_percent,
-                       g.commission_percent
+                       COALESCE(sgf.commission_percent, g.commission_percent)
+                         AS commission_percent
                 FROM group_buys gb
                 JOIN products p ON p.id = gb.product_id
                 JOIN stores s ON s.id = p.store_id
                 JOIN users u ON u.telegram_id = s.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = s.seller_telegram_id
                 WHERE gb.id = ? AND s.seller_telegram_id = ?
                 """, groupBuyId, sellerTelegramId);
         double botRate = ((Number) pricing.get("bot_commission_percent")).doubleValue();
@@ -539,7 +590,7 @@ public class MarketplaceService {
 
     @Transactional
     public void confirmGroupBuy(long groupBuyId, long sellerTelegramId) {
-        assertGroupBuySeller(groupBuyId, sellerTelegramId);
+        assertGroupBuySellerCanTrade(groupBuyId, sellerTelegramId);
         Integer unpaid = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM group_buy_reservations
                 WHERE group_buy_id = ? AND status <> 'PAID'
@@ -547,11 +598,68 @@ public class MarketplaceService {
         if (unpaid != null && unpaid > 0) {
             throw new IllegalStateException("Not all participants are marked as paid");
         }
-        jdbc.update("""
+        int formed = jdbc.update("""
                 UPDATE group_buys SET status = 'FORMED',
                   formed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'AWAITING_PAYMENT'
                 """, groupBuyId);
+        if (formed == 0) {
+            throw new IllegalStateException("Закупка уже перешла на другой этап");
+        }
+        Map<String, Object> finance = jdbc.queryForMap("""
+                SELECT p.group_id, p.seller_price_kopecks,
+                       u.bot_commission_percent,
+                       COALESCE(sgf.commission_percent, g.commission_percent)
+                         AS group_commission_percent,
+                       (SELECT COUNT(*) FROM group_buy_reservations r
+                        WHERE r.group_buy_id = gb.id AND r.status = 'PAID')
+                         AS paid_count
+                FROM group_buys gb
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users u ON u.telegram_id = st.seller_telegram_id
+                JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
+                WHERE gb.id = ?
+                """, groupBuyId);
+        long groupId = ((Number) finance.get("group_id")).longValue();
+        long sellerPrice = ((Number) finance.get("seller_price_kopecks")).longValue();
+        long paidCount = ((Number) finance.get("paid_count")).longValue();
+        long platformCommission = Math.round(
+                sellerPrice *
+                        ((Number) finance.get("bot_commission_percent")).doubleValue() /
+                        100
+        ) * paidCount;
+        long groupCommission = Math.round(
+                sellerPrice *
+                        ((Number) finance.get("group_commission_percent")).doubleValue() /
+                        100
+        ) * paidCount;
+        jdbc.update("""
+                UPDATE users SET commission_debt_kopecks = commission_debt_kopecks + ?
+                WHERE telegram_id = ?
+                """, platformCommission, sellerTelegramId);
+        ensureSellerGroupFinance(groupId, sellerTelegramId);
+        jdbc.update("""
+                UPDATE seller_group_finance
+                SET commission_debt_kopecks = commission_debt_kopecks + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE group_id = ? AND seller_telegram_id = ?
+                """, groupCommission, groupId, sellerTelegramId);
+        jdbc.update("""
+                INSERT INTO commission_ledger
+                  (seller_telegram_id, amount_kopecks, entry_type)
+                VALUES (?, ?, 'ACCRUAL')
+                """, sellerTelegramId, platformCommission);
+        jdbc.update("""
+                INSERT INTO group_commission_ledger
+                  (group_id, seller_telegram_id, group_buy_id, amount_kopecks, entry_type)
+                VALUES (?, ?, ?, ?, 'ACCRUAL')
+                """, groupId, sellerTelegramId, groupBuyId, groupCommission);
+        refreshSellerBlock(sellerTelegramId);
+        notifySellerFinanceState(sellerTelegramId, groupId);
         participantIds(groupBuyId).forEach(id -> notifyUser(id, """
                 <b>Закупка сформирована</b>
                 %s
@@ -564,7 +672,7 @@ public class MarketplaceService {
     @Transactional
     public void updateDelivery(long groupBuyId, long sellerTelegramId, Instant from,
                                Instant to, String note) {
-        assertGroupBuySeller(groupBuyId, sellerTelegramId);
+        assertGroupBuySellerCanTrade(groupBuyId, sellerTelegramId);
         jdbc.update("""
                 UPDATE group_buys SET status = 'IN_DELIVERY', delivery_from = ?,
                   delivery_to = ?, delivery_note = ?, updated_at = CURRENT_TIMESTAMP
@@ -591,11 +699,15 @@ public class MarketplaceService {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.id, p.stock, p.seller_price_kopecks, p.group_id,
                        p.active, p.deleted, st.seller_telegram_id, u.bot_commission_percent,
-                       g.commission_percent
+                       COALESCE(sgf.commission_percent, g.commission_percent)
+                         AS commission_percent
                 FROM products p
                 JOIN stores st ON st.id = p.store_id
                 JOIN users u ON u.telegram_id = st.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
                 WHERE p.id = ?
                 """, productId);
         long sellerId = ((Number) product.get("seller_telegram_id")).longValue();
@@ -612,15 +724,18 @@ public class MarketplaceService {
         long sellerPrice = ((Number) product.get("seller_price_kopecks")).longValue();
         double botRate = ((Number) product.get("bot_commission_percent")).doubleValue();
         double groupRate = ((Number) product.get("commission_percent")).doubleValue();
-        long buyerPrice = Math.round(sellerPrice * (1 + botRate / 100 + groupRate / 100));
-        long commission = buyerPrice - sellerPrice;
+        long platformCommission = Math.round(sellerPrice * botRate / 100);
+        long groupCommission = Math.round(sellerPrice * groupRate / 100);
+        long commission = platformCommission + groupCommission;
+        long buyerPrice = sellerPrice + commission;
         Long orderId = jdbc.queryForObject("""
                 INSERT INTO orders
                   (product_id, buyer_telegram_id, seller_telegram_id, group_id,
-                   seller_price_kopecks, buyer_price_kopecks, commission_kopecks)
-                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+                   seller_price_kopecks, buyer_price_kopecks, commission_kopecks,
+                   platform_commission_kopecks, group_commission_kopecks)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
                 """, Long.class, productId, buyerTelegramId, sellerId, groupId,
-                sellerPrice, buyerPrice, commission);
+                sellerPrice, buyerPrice, commission, platformCommission, groupCommission);
         jdbc.update("UPDATE products SET stock = stock - 1 WHERE id = ?", productId);
         Map<String, Object> order = orderNotificationDetails(orderId);
         notifyUser(sellerId, """
@@ -810,8 +925,9 @@ public class MarketplaceService {
     @Transactional
     public void advanceOrder(long orderId, long actorTelegramId, String targetStatus) {
         Map<String, Object> order = jdbc.queryForMap("""
-                SELECT buyer_telegram_id, seller_telegram_id, product_id,
-                       status, commission_kopecks
+                SELECT buyer_telegram_id, seller_telegram_id, product_id, group_id,
+                       status, commission_kopecks,
+                       platform_commission_kopecks, group_commission_kopecks
                 FROM orders WHERE id = ?
                 """, orderId);
         String current = String.valueOf(order.get("status"));
@@ -827,6 +943,11 @@ public class MarketplaceService {
             default -> false;
         };
         if (!valid) throw new IllegalStateException("Invalid order status transition");
+        if ("SHIPPED".equals(targetStatus)) {
+            assertSellerCanTrade(
+                    seller, ((Number) order.get("group_id")).longValue()
+            );
+        }
         int updated = jdbc.update("""
                 UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = ?
@@ -872,26 +993,45 @@ public class MarketplaceService {
                     """.formatted(orderSummary(details)));
         }
         if ("COMPLETED".equals(targetStatus)) {
-            long commission = ((Number) order.get("commission_kopecks")).longValue();
+            long platformCommission =
+                    ((Number) order.get("platform_commission_kopecks")).longValue();
+            long groupCommission =
+                    ((Number) order.get("group_commission_kopecks")).longValue();
+            long groupId = ((Number) order.get("group_id")).longValue();
             jdbc.update("""
                     UPDATE users SET commission_debt_kopecks = commission_debt_kopecks + ?
                     WHERE telegram_id = ?
-                    """, commission, seller);
+                    """, platformCommission, seller);
             jdbc.update("""
                     INSERT INTO commission_ledger
                       (seller_telegram_id, order_id, amount_kopecks, entry_type)
                     VALUES (?, ?, ?, 'ACCRUAL')
-                    """, seller, orderId, commission);
+                    """, seller, orderId, platformCommission);
+            ensureSellerGroupFinance(groupId, seller);
+            jdbc.update("""
+                    UPDATE seller_group_finance
+                    SET commission_debt_kopecks = commission_debt_kopecks + ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE group_id = ? AND seller_telegram_id = ?
+                    """, groupCommission, groupId, seller);
+            jdbc.update("""
+                    INSERT INTO group_commission_ledger
+                      (group_id, seller_telegram_id, order_id, amount_kopecks, entry_type)
+                    VALUES (?, ?, ?, ?, 'ACCRUAL')
+                    """, groupId, seller, orderId, groupCommission);
             refreshSellerBlock(seller);
+            notifySellerFinanceState(seller, groupId);
             notifyUser(seller, """
                     <b>Заказ завершён</b>
                     %s
 
-                    Покупатель подтвердил получение. Начисленная комиссия:
-                    <b>%s</b>. Она добавлена к задолженности продавца.
+                    Покупатель подтвердил получение.
+                    Долг платформе: <b>%s</b>.
+                    Долг клубу: <b>%s</b>.
                     """.formatted(
                     orderSummary(details),
-                    formatMoney(details.get("commission_kopecks"))
+                    formatMoney(platformCommission),
+                    formatMoney(groupCommission)
             ));
             notifyUser(buyer, """
                     <b>Заказ завершён</b>
@@ -949,14 +1089,134 @@ public class MarketplaceService {
     public List<Map<String, Object>> commissionDebts() {
         return jdbc.queryForList("""
                 SELECT u.telegram_id, u.username, u.first_name, u.last_name,
-                       u.commission_debt_kopecks, u.debt_limit_kopecks, u.seller_blocked,
-                       COUNT(o.id) FILTER (WHERE o.status = 'COMPLETED') AS completed_orders
+                       u.bot_commission_percent,
+                       u.commission_debt_kopecks, u.debt_limit_kopecks,
+                       (u.commission_debt_kopecks >= u.debt_limit_kopecks)
+                         AS seller_blocked,
+                       COUNT(DISTINCT o.id) FILTER (
+                         WHERE o.status = 'COMPLETED'
+                       ) AS completed_orders,
+                       COUNT(DISTINCT st.id) AS store_count,
+                       GROUP_CONCAT(DISTINCT g.title) AS club_titles
                 FROM users u
                 LEFT JOIN orders o ON o.seller_telegram_id = u.telegram_id
-                WHERE u.commission_debt_kopecks > 0
+                JOIN stores st ON st.seller_telegram_id = u.telegram_id
+                JOIN telegram_groups g ON g.id = st.group_id
                 GROUP BY u.telegram_id
                 ORDER BY u.seller_blocked DESC, u.commission_debt_kopecks DESC
                 """);
+    }
+
+    @Transactional
+    public void updatePlatformSellerFinance(long sellerTelegramId,
+                                            double commissionPercent,
+                                            long debtLimitKopecks) {
+        int updated = jdbc.update("""
+                UPDATE users SET bot_commission_percent = ?, debt_limit_kopecks = ?,
+                  seller_blocked = commission_debt_kopecks >= ?,
+                  updated_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ?
+                """, commissionPercent, debtLimitKopecks, debtLimitKopecks,
+                sellerTelegramId);
+        if (updated == 0) throw new IllegalArgumentException("Пользователь не найден");
+        List<Long> groupIds = jdbc.queryForList("""
+                SELECT group_id FROM stores
+                WHERE seller_telegram_id = ?
+                ORDER BY id LIMIT 1
+                """, Long.class, sellerTelegramId);
+        if (!groupIds.isEmpty()) {
+            notifySellerFinanceState(sellerTelegramId, groupIds.get(0));
+        }
+    }
+
+    public List<Map<String, Object>> groupSellerFinances(long telegramGroupId,
+                                                         long ownerTelegramId) {
+        assertGroupOwner(telegramGroupId, ownerTelegramId);
+        return jdbc.queryForList("""
+                SELECT u.telegram_id, u.username,
+                       COALESCE(NULLIF(u.display_name, ''),
+                         TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')))
+                         AS seller_name,
+                       st.name AS store_name,
+                       COALESCE(sgf.commission_percent, g.commission_percent)
+                         AS commission_percent,
+                       COALESCE(sgf.commission_debt_kopecks, 0)
+                         AS commission_debt_kopecks,
+                       COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
+                         AS debt_limit_kopecks,
+                       (COALESCE(sgf.commission_debt_kopecks, 0)
+                         >= COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks))
+                         AS seller_blocked
+                FROM stores st
+                JOIN telegram_groups g ON g.id = st.group_id
+                JOIN users u ON u.telegram_id = st.seller_telegram_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
+                WHERE g.telegram_group_id = ?
+                ORDER BY seller_blocked DESC, commission_debt_kopecks DESC,
+                         seller_name
+                """, telegramGroupId);
+    }
+
+    @Transactional
+    public void updateGroupSellerFinance(long telegramGroupId,
+                                         long ownerTelegramId,
+                                         long sellerTelegramId,
+                                         double commissionPercent,
+                                         long debtLimitKopecks) {
+        assertGroupOwner(telegramGroupId, ownerTelegramId);
+        Long groupId = jdbc.queryForObject(
+                "SELECT id FROM telegram_groups WHERE telegram_group_id = ?",
+                Long.class, telegramGroupId
+        );
+        ensureSellerGroupFinance(groupId, sellerTelegramId);
+        int updated = jdbc.update("""
+                UPDATE seller_group_finance
+                SET commission_percent = ?, debt_limit_kopecks = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE group_id = ? AND seller_telegram_id = ?
+                  AND EXISTS (
+                    SELECT 1 FROM stores st
+                    WHERE st.group_id = ? AND st.seller_telegram_id = ?
+                  )
+                """, commissionPercent, debtLimitKopecks,
+                groupId, sellerTelegramId, groupId, sellerTelegramId);
+        if (updated == 0) throw new IllegalArgumentException("Продавец не найден в клубе");
+        notifySellerFinanceState(sellerTelegramId, groupId);
+    }
+
+    @Transactional
+    public void repayGroupSellerDebt(long telegramGroupId,
+                                     long ownerTelegramId,
+                                     long sellerTelegramId,
+                                     long amountKopecks) {
+        assertGroupOwner(telegramGroupId, ownerTelegramId);
+        Long groupId = jdbc.queryForObject(
+                "SELECT id FROM telegram_groups WHERE telegram_group_id = ?",
+                Long.class, telegramGroupId
+        );
+        int updated = jdbc.update("""
+                UPDATE seller_group_finance
+                SET commission_debt_kopecks =
+                      MAX(0, commission_debt_kopecks - ?),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE group_id = ? AND seller_telegram_id = ?
+                """, amountKopecks, groupId, sellerTelegramId);
+        if (updated == 0) throw new IllegalArgumentException("Продавец не найден в клубе");
+        jdbc.update("""
+                INSERT INTO group_commission_ledger
+                  (group_id, seller_telegram_id, amount_kopecks,
+                   entry_type, recorded_by_telegram_id)
+                VALUES (?, ?, ?, 'REPAYMENT', ?)
+                """, groupId, sellerTelegramId, -amountKopecks, ownerTelegramId);
+        notifyUser(sellerTelegramId, """
+                <b>Администратор клуба подтвердил оплату комиссии</b>
+                Погашено: <b>%s</b>
+
+                Если оба долга теперь ниже лимитов, объявления автоматически
+                вернулись в каталог и продажи снова доступны.
+                """.formatted(formatMoney(amountKopecks)));
     }
 
     @Transactional
@@ -1099,7 +1359,7 @@ public class MarketplaceService {
         return jdbc.queryForList("""
                 SELECT u.telegram_id, u.username, u.first_name, u.last_name,
                        u.display_name, u.phone, u.registered, u.globally_banned,
-                       u.seller_blocked, u.created_at,
+                       u.seller_blocked, u.super_admin, u.created_at,
                        COUNT(DISTINCT o.id) AS order_count,
                        COUNT(DISTINCT s.id) AS store_count
                 FROM users u
@@ -1119,9 +1379,42 @@ public class MarketplaceService {
                 """, normalized, pattern);
     }
 
+    public boolean isSuperAdmin(long telegramId) {
+        if (telegramId == superAdminTelegramId) return true;
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM users
+                WHERE telegram_id = ? AND super_admin = 1
+                """, Integer.class, telegramId);
+        return count != null && count > 0;
+    }
+
+    @Transactional
+    public void setSuperAdmin(long telegramId, boolean enabled) {
+        if (telegramId == superAdminTelegramId && !enabled) {
+            throw new IllegalArgumentException(
+                    "Нельзя снять права у основного супер-администратора"
+            );
+        }
+        int updated = jdbc.update("""
+                UPDATE users SET super_admin = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ?
+                """, enabled, telegramId);
+        if (updated == 0) throw new IllegalArgumentException("Пользователь не найден");
+        notifyUser(telegramId, enabled
+                ? """
+                  <b>Вам выданы права супер-администратора</b>
+                  Теперь доступен раздел управления платформой, комиссиями,
+                  пользователями, группами и модерацией.
+                  """
+                : """
+                  <b>Права супер-администратора сняты</b>
+                  Раздел управления платформой больше недоступен.
+                  """);
+    }
+
     @Transactional
     public void setGlobalUserBan(long telegramId, boolean banned) {
-        if (telegramId == superAdminTelegramId) {
+        if (isSuperAdmin(telegramId)) {
             throw new IllegalArgumentException("Нельзя заблокировать супер-администратора");
         }
         Map<String, Object> user = jdbc.queryForMap("""
@@ -1161,12 +1454,12 @@ public class MarketplaceService {
                 WHERE telegram_id = ?
                 """, banned, telegramId);
         if (updated == 0) throw new IllegalArgumentException("Пользователь не найден");
-        if (banned) {
+        if (!banned) {
             jdbc.update("""
-                    UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP
+                    UPDATE products SET active = 1, updated_at = CURRENT_TIMESTAMP
                     WHERE store_id IN (
                       SELECT id FROM stores WHERE seller_telegram_id = ?
-                    )
+                    ) AND deleted = 0
                     """, telegramId);
         }
         String seller = userLabel(user, "");
@@ -1192,9 +1485,8 @@ public class MarketplaceService {
                   <b>Глобальная блокировка снята</b>
                   Профиль: %s
 
-                  Доступ к REDLINE восстановлен, связанные покупки снова доступны
-                  покупателям. Объявления, отключённые во время модерации, необходимо
-                  включить вручную в разделе «Мои объявления».
+                  Доступ к REDLINE восстановлен, связанные покупки и активные
+                  объявления снова доступны покупателям.
                   """.formatted(seller));
         affectedBuyers.forEach(buyerId -> notifyUser(buyerId, banned
                 ? """
@@ -1322,11 +1614,11 @@ public class MarketplaceService {
                    WHERE s.group_id = g.id AND s.active = 1) AS sellers,
                   (SELECT COUNT(*) FROM orders o
                    WHERE o.group_id = g.id AND o.status = 'COMPLETED') AS completed_orders,
-                  (SELECT COALESCE(SUM(ROUND(
-                     o.seller_price_kopecks * g.commission_percent / 100
-                   )), 0) FROM orders o
-                   WHERE o.group_id = g.id AND o.status = 'COMPLETED')
-                    AS group_commission_kopecks
+                  (SELECT COALESCE(SUM(l.amount_kopecks), 0)
+                   FROM group_commission_ledger l
+                   WHERE l.group_id = g.id AND l.entry_type = 'ACCRUAL')
+                    AS group_commission_kopecks,
+                  g.payment_details
                 FROM telegram_groups g
                 WHERE g.telegram_group_id = ? AND g.owner_telegram_id = ?
                 """, telegramGroupId, ownerTelegramId);
@@ -1334,33 +1626,36 @@ public class MarketplaceService {
 
     public Map<String, Object> globalSettings() {
         return jdbc.queryForMap("""
-                SELECT bot_commission_percent, default_debt_limit_kopecks
+                SELECT bot_commission_percent, default_debt_limit_kopecks,
+                       payment_details
                 FROM platform_settings WHERE singleton = 1
                 """);
     }
 
     @Transactional
-    public void updateGlobalSettings(double botCommissionPercent, long debtLimitKopecks) {
+    public void updateGlobalSettings(double botCommissionPercent,
+                                     long debtLimitKopecks,
+                                     String paymentDetails) {
         jdbc.update("""
                 UPDATE platform_settings SET bot_commission_percent = ?,
-                  default_debt_limit_kopecks = ?, updated_at = CURRENT_TIMESTAMP
+                  default_debt_limit_kopecks = ?, payment_details = ?,
+                  updated_at = CURRENT_TIMESTAMP
                 WHERE singleton = 1
-                """, botCommissionPercent, debtLimitKopecks);
-        jdbc.update("""
-                UPDATE users SET bot_commission_percent = ?, debt_limit_kopecks = ?
-                """, botCommissionPercent, debtLimitKopecks);
-        jdbc.update("""
-                UPDATE users SET seller_blocked = commission_debt_kopecks >= debt_limit_kopecks
-                """);
+                """, botCommissionPercent, debtLimitKopecks,
+                paymentDetails == null ? "" : paymentDetails.strip());
     }
 
     @Transactional
     public void updateGroupCommission(long telegramGroupId, long ownerTelegramId,
-                                      double commissionPercent) {
+                                      double commissionPercent,
+                                      String paymentDetails) {
         int updated = jdbc.update("""
-                UPDATE telegram_groups SET commission_percent = ?
+                UPDATE telegram_groups SET commission_percent = ?,
+                  payment_details = ?
                 WHERE telegram_group_id = ? AND owner_telegram_id = ?
-                """, commissionPercent, telegramGroupId, ownerTelegramId);
+                """, commissionPercent,
+                paymentDetails == null ? "" : paymentDetails.strip(),
+                telegramGroupId, ownerTelegramId);
         if (updated == 0) throw new IllegalArgumentException("Group owner access required");
     }
 
@@ -1427,16 +1722,16 @@ public class MarketplaceService {
                     ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                       reason = EXCLUDED.reason
                     """, groupId, sellerTelegramId);
-            jdbc.update("""
-                    UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP
-                    WHERE group_id = ? AND store_id IN (
-                      SELECT id FROM stores WHERE seller_telegram_id = ?
-                    )
-                    """, groupId, sellerTelegramId);
         } else {
             jdbc.update("""
                     DELETE FROM group_seller_bans
                     WHERE group_id = ? AND seller_telegram_id = ?
+                    """, groupId, sellerTelegramId);
+            jdbc.update("""
+                    UPDATE products SET active = 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE group_id = ? AND deleted = 0 AND store_id IN (
+                      SELECT id FROM stores WHERE seller_telegram_id = ?
+                    )
                     """, groupId, sellerTelegramId);
         }
         String seller = userLabel(sellerTelegramId);
@@ -1454,8 +1749,7 @@ public class MarketplaceService {
                   <b>Блокировка продавца в клубе снята</b>
                   Клуб: <b>%s</b>
 
-                  Связанные покупки снова доступны участникам. Объявления,
-                  отключённые во время блокировки, включите вручную.
+                  Связанные покупки и активные объявления снова доступны участникам.
                   """.formatted(escapeHtml(groupTitle)));
         affectedBuyers.forEach(buyerId -> notifyUser(buyerId, banned
                 ? """
@@ -1499,21 +1793,40 @@ public class MarketplaceService {
     private void assertSellerCanTrade(long sellerId, long groupId) {
         Map<String, Object> seller = jdbc.queryForMap("""
                 SELECT u.commission_debt_kopecks,
-                  COALESCE(g.debt_limit_kopecks, u.debt_limit_kopecks)
-                    AS debt_limit_kopecks,
+                  u.debt_limit_kopecks,
+                  COALESCE(sgf.commission_debt_kopecks, 0)
+                    AS group_debt_kopecks,
+                  COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
+                    AS group_debt_limit_kopecks,
                   u.globally_banned,
                   EXISTS(SELECT 1 FROM group_seller_bans b
                     WHERE b.group_id = ? AND b.seller_telegram_id = u.telegram_id) AS group_banned
                 FROM users u
                 LEFT JOIN telegram_groups g ON g.id = ?
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = u.telegram_id
                 WHERE u.telegram_id = ?
                 """, groupId, groupId, sellerId);
         long debt = ((Number) seller.get("commission_debt_kopecks")).longValue();
         long limit = ((Number) seller.get("debt_limit_kopecks")).longValue();
+        long groupDebt = ((Number) seller.get("group_debt_kopecks")).longValue();
+        long groupLimit = ((Number) seller.get("group_debt_limit_kopecks")).longValue();
         if (asBoolean(seller.get("globally_banned")) ||
-                asBoolean(seller.get("group_banned")) || debt >= limit) {
+                asBoolean(seller.get("group_banned")) ||
+                debt >= limit || groupDebt >= groupLimit) {
             throw new IllegalStateException("Seller is temporarily not accepting orders");
         }
+    }
+
+    private void ensureSellerGroupFinance(long groupId, long sellerId) {
+        jdbc.update("""
+                INSERT INTO seller_group_finance
+                  (group_id, seller_telegram_id, commission_percent, debt_limit_kopecks)
+                SELECT g.id, ?, g.commission_percent, g.debt_limit_kopecks
+                FROM telegram_groups g WHERE g.id = ?
+                ON CONFLICT (group_id, seller_telegram_id) DO NOTHING
+                """, sellerId, groupId);
     }
 
     private void assertGroupBuySeller(long groupBuyId, long sellerId) {
@@ -1524,6 +1837,19 @@ public class MarketplaceService {
                 WHERE gb.id = ? AND s.seller_telegram_id = ?
                 """, Integer.class, groupBuyId, sellerId);
         if (count == null || count == 0) throw new IllegalArgumentException("Not a group buy seller");
+    }
+
+    private void assertGroupBuySellerCanTrade(long groupBuyId, long sellerId) {
+        Long groupId = jdbc.queryForObject("""
+                SELECT p.group_id FROM group_buys gb
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores s ON s.id = p.store_id
+                WHERE gb.id = ? AND s.seller_telegram_id = ?
+                """, Long.class, groupBuyId, sellerId);
+        if (groupId == null) {
+            throw new IllegalArgumentException("Not a group buy seller");
+        }
+        assertSellerCanTrade(sellerId, groupId);
     }
 
     private List<Long> participantIds(long groupBuyId) {
@@ -1573,6 +1899,51 @@ public class MarketplaceService {
                     снова могут принимать новые заказы.
                     """.formatted(formatMoney(debt), formatMoney(limit)));
         }
+    }
+
+    private void notifySellerFinanceState(long sellerId, long groupId) {
+        Map<String, Object> finance = jdbc.queryForMap("""
+                SELECT u.commission_debt_kopecks AS platform_debt,
+                       u.debt_limit_kopecks AS platform_limit,
+                       ps.payment_details AS platform_details,
+                       sgf.commission_debt_kopecks AS group_debt,
+                       sgf.debt_limit_kopecks AS group_limit,
+                       g.payment_details AS group_details,
+                       g.title AS group_title
+                FROM users u
+                JOIN platform_settings ps ON ps.singleton = 1
+                JOIN telegram_groups g ON g.id = ?
+                JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = u.telegram_id
+                WHERE u.telegram_id = ?
+                """, groupId, sellerId);
+        long platformDebt = ((Number) finance.get("platform_debt")).longValue();
+        long platformLimit = ((Number) finance.get("platform_limit")).longValue();
+        long groupDebt = ((Number) finance.get("group_debt")).longValue();
+        long groupLimit = ((Number) finance.get("group_limit")).longValue();
+        if (platformDebt < platformLimit && groupDebt < groupLimit) return;
+        notifyUser(sellerId, """
+                <b>Продажи временно приостановлены</b>
+                Объявления скрыты из каталога, новые публикации и продолжение
+                продаж недоступны. Покупать товары других продавцов можно.
+
+                Долг платформе: <b>%s</b> (лимит %s)
+                Реквизиты супер-администратора: <b>%s</b>
+
+                Долг клубу «%s»: <b>%s</b> (лимит %s)
+                Реквизиты администратора клуба: <b>%s</b>
+
+                Погасите тот долг, который достиг лимита. После подтверждения
+                платежа соответствующим администратором объявления автоматически
+                вернутся в каталог.
+                """.formatted(
+                formatMoney(platformDebt), formatMoney(platformLimit),
+                escapeHtml(String.valueOf(finance.get("platform_details"))),
+                escapeHtml(String.valueOf(finance.get("group_title"))),
+                formatMoney(groupDebt), formatMoney(groupLimit),
+                escapeHtml(String.valueOf(finance.get("group_details")))
+        ));
     }
 
     private void notifyUser(long telegramId, String text) {
@@ -1750,13 +2121,17 @@ public class MarketplaceService {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT g.telegram_group_id, g.shop_thread_id, p.title, p.description, p.stock,
                        CAST(ROUND(p.seller_price_kopecks *
-                         (1 + u.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
+                         (1 + u.bot_commission_percent / 100
+                          + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        json_extract(p.image_urls, '$[0]') AS image_url
                 FROM products p
                 JOIN stores s ON s.id = p.store_id
                 JOIN users u ON u.telegram_id = s.seller_telegram_id
                 JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = s.seller_telegram_id
                 WHERE p.id = ?
                 """, productId);
         Object image = product.get("image_url");

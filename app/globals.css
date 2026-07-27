@@ -708,6 +708,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   letter-spacing: .1em;
 }
 .admin-settings-form input,
+.admin-settings-form textarea,
 .group-management-row input {
   width: 100%;
   border: 1px solid var(--line);
@@ -715,6 +716,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: white;
   padding: 13px;
 }
+.admin-settings-form textarea { resize: vertical; min-height: 92px; }
 .admin-settings-form .main-action { width: min(320px, 100%); }
 .subsection-heading { margin: 34px 0 14px; }
 .subsection-heading h2 {
@@ -1008,8 +1010,43 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .admin-user-card b { font-size: 10px; overflow-wrap: anywhere; }
 .admin-user-card small { color: #777; font-size: 8px; margin-top: 3px; overflow-wrap: anywhere; }
 .admin-user-card p { color: #5f5f5f; font-size: 8px; margin: 6px 0 0; }
-.admin-user-card > button { grid-column: 1 / -1; min-height: 36px; border: 1px solid rgba(227,27,35,.34); background: rgba(227,27,35,.08); color: #ff7177; font-size: 8px; text-transform: uppercase; cursor: pointer; }
-.admin-user-card > button.unban-action { border-color: rgba(87,199,139,.3); background: rgba(87,199,139,.07); color: var(--green); }
+.admin-user-actions { grid-column: 1 / -1; display: grid !important; grid-template-columns: 1fr 1fr; gap: 7px; }
+.admin-user-actions button { min-height: 36px; padding: 5px 8px; border: 1px solid rgba(227,27,35,.34); background: rgba(227,27,35,.08); color: #ff7177; font-size: 8px; text-transform: uppercase; cursor: pointer; }
+.admin-user-actions button:first-child { border-color: rgba(214,174,62,.34); background: rgba(214,174,62,.08); color: var(--gold); }
+.admin-user-actions button.unban-action { border-color: rgba(87,199,139,.3); background: rgba(87,199,139,.07); color: var(--green); }
+.admin-user-actions button.super-admin-active { border-color: rgba(87,199,139,.3); background: rgba(87,199,139,.07); color: var(--green); opacity: 1; }
+.admin-user-actions button:disabled { cursor: default; opacity: .45; }
+
+.finance-admin-list { display: flex; flex-direction: column; gap: 10px; }
+.seller-finance-admin-row { display: grid; grid-template-columns: minmax(180px, 1.5fr) minmax(105px, .7fr) minmax(120px, .8fr) minmax(120px, .8fr); gap: 10px; align-items: end; padding: 15px; border: 1px solid var(--line); background: #121212; }
+.seller-finance-admin-row.blocked { border-color: rgba(227,27,35,.42); background: rgba(227,27,35,.055); }
+.seller-finance-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.seller-finance-identity p { display: flex; flex-direction: column; min-width: 0; margin: 0; }
+.seller-finance-identity b { font-size: 10px; overflow-wrap: anywhere; }
+.seller-finance-identity small { color: #666; font-size: 7px; margin-top: 3px; overflow-wrap: anywhere; }
+.seller-finance-admin-row label,
+.seller-finance-debt { display: flex; flex-direction: column; gap: 6px; }
+.seller-finance-admin-row label span,
+.seller-finance-debt span { color: #777; font-size: 7px; text-transform: uppercase; letter-spacing: .1em; }
+.seller-finance-admin-row input { width: 100%; min-height: 40px; border: 1px solid var(--line); background: #171717; color: #eee; padding: 9px; }
+.seller-finance-debt { min-height: 40px; justify-content: center; padding: 7px 10px; border: 1px solid var(--line); }
+.seller-finance-debt b { color: var(--red-2); font-family: var(--font-oswald); font-size: 18px; }
+.seller-finance-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; }
+.seller-finance-actions button { min-height: 36px; padding: 0 13px; border: 1px solid var(--line); background: #1b1b1b; color: #aaa; font-size: 8px; text-transform: uppercase; cursor: pointer; }
+.seller-finance-actions button:last-child { border-color: rgba(87,199,139,.3); color: var(--green); }
+.seller-finance-actions button:disabled { opacity: .4; cursor: default; }
+
+.seller-debt-backdrop { align-items: center; padding: 12px; overflow-y: auto; z-index: 95; }
+.seller-debt-modal { margin: auto; }
+.seller-debt-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin: 14px 0; }
+.seller-debt-breakdown article { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--line); background: #151515; }
+.seller-debt-breakdown article.blocked { border-color: rgba(227,27,35,.45); background: rgba(227,27,35,.07); }
+.seller-debt-breakdown article > span { color: #777; font-size: 7px; letter-spacing: .1em; }
+.seller-debt-breakdown article > b { font-family: var(--font-oswald); font-size: 25px; }
+.seller-debt-breakdown article > small { color: #777; font-size: 8px; line-height: 1.5; }
+.seller-debt-breakdown article > p { display: flex; flex-direction: column; gap: 5px; margin: 7px 0 0; color: #bbb; font-size: 9px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.seller-debt-breakdown article > p strong { color: #777; font-size: 7px; text-transform: uppercase; }
+.seller-debt-note { color: #888 !important; font-size: 9px !important; line-height: 1.6; }
 .report-review-card { padding: 16px; border-bottom: 1px solid var(--line); }
 .report-review-card.pending { background: linear-gradient(90deg, rgba(227,27,35,.055), transparent); }
 .report-review-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
@@ -1083,6 +1120,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   }
   .group-management-row > label,
   .group-management-row > button { grid-column: 1 / -1; }
+  .seller-finance-admin-row { grid-template-columns: 1fr 1fr; }
+  .seller-finance-identity,
+  .seller-finance-debt,
+  .seller-finance-actions { grid-column: 1 / -1; }
+  .seller-finance-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .seller-debt-breakdown { grid-template-columns: 1fr; }
+  .admin-user-actions { grid-template-columns: 1fr; }
   .group-management-row .active-check { grid-column: 1 / 2; }
   .group-management-row > button { grid-column: 2 / 3; align-self: end; }
   .favorites-filter { padding: 0 9px; }
