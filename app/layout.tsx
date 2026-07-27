@@ -1,0 +1,54 @@
+import type { Metadata, Viewport } from "next";
+import { Manrope, Oswald } from "next/font/google";
+import "./globals.css";
+
+const manrope = Manrope({
+  variable: "--font-manrope",
+  subsets: ["cyrillic", "latin"],
+});
+
+const oswald = Oswald({
+  variable: "--font-oswald",
+  subsets: ["cyrillic", "latin"],
+});
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+  themeColor: "#080808",
+};
+
+export const metadata: Metadata = {
+  title: "REDLINE CLUB — автотовары в Telegram",
+  description:
+    "Премиальный маркетплейс автотоваров и групповых закупок внутри Telegram.",
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
+  openGraph: {
+    title: "REDLINE CLUB",
+    description: "Автотовары. Проверенные продавцы. Выгодные групповые закупки.",
+    images: [{ url: "/og.png", width: 1536, height: 1024 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "REDLINE CLUB",
+    description: "Премиальный автомаркет внутри Telegram.",
+    images: ["/og.png"],
+  },
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <html lang="ru">
+      <body className={`${manrope.variable} ${oswald.variable}`}>
+        {children}
+      </body>
+    </html>
+  );
+}

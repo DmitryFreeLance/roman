@@ -1,0 +1,38 @@
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
+
+spring:
+  application:
+    name: redline-telegram-bot
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/redline}
+    username: ${DATABASE_USER:redline}
+    password: ${DATABASE_PASSWORD:redline}
+    hikari:
+      maximum-pool-size: 10
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+redline:
+  telegram:
+    token: ${TELEGRAM_BOT_TOKEN:}
+    webhook-secret: ${TELEGRAM_WEBHOOK_SECRET:change-me}
+    mini-app-url: ${MINI_APP_URL:http://localhost:3000}
+    public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
+  marketplace:
+    super-admin-telegram-id: ${SUPER_ADMIN_TELEGRAM_ID:0}
+    bot-commission-percent: ${BOT_COMMISSION_PERCENT:5.0}
+    default-debt-limit-kopecks: ${DEBT_LIMIT_KOPECKS:50000}
