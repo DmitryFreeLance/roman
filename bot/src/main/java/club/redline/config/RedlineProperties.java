@@ -9,9 +9,8 @@ public record RedlineProperties(
 ) {
     public record Telegram(
             String token,
-            String webhookSecret,
             String miniAppUrl,
-            String publicBaseUrl
+            int pollingTimeoutSeconds
     ) {}
 
     public record Marketplace(

@@ -29,9 +29,8 @@ management:
 redline:
   telegram:
     token: ${TELEGRAM_BOT_TOKEN:}
-    webhook-secret: ${TELEGRAM_WEBHOOK_SECRET:change-me}
-    mini-app-url: ${MINI_APP_URL:http://localhost:3000}
-    public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
+    mini-app-url: ${MINI_APP_URL:https://poznaysebya.site/redlineclub/}
+    polling-timeout-seconds: ${TELEGRAM_POLLING_TIMEOUT_SECONDS:50}
   marketplace:
     super-admin-telegram-id: ${SUPER_ADMIN_TELEGRAM_ID:0}
     bot-commission-percent: ${BOT_COMMISSION_PERCENT:5.0}

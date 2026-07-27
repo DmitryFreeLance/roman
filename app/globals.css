@@ -48,7 +48,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .avatar-button { width: 42px; height: 42px; border-radius: 50%; font-weight: 800; background: linear-gradient(145deg, #301014, #111); }
 .page-content { min-height: calc(100vh - 72px); }
 
-.hero { min-height: 470px; position: relative; display: flex; align-items: center; padding: 62px max(7vw, 28px); overflow: hidden; background-image: linear-gradient(90deg, rgba(3,3,3,.22), rgba(3,3,3,.08)), url("/redline-hero.png"); background-size: cover; background-position: center; border-bottom: 1px solid var(--line); }
+.hero { min-height: 470px; position: relative; display: flex; align-items: center; padding: 62px max(7vw, 28px); overflow: hidden; background-image: linear-gradient(90deg, rgba(3,3,3,.22), rgba(3,3,3,.08)), url("/redlineclub/redline-hero.png"); background-size: cover; background-position: center; border-bottom: 1px solid var(--line); }
 .hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 52%, var(--bg)), linear-gradient(90deg, rgba(0,0,0,.26), transparent 60%); pointer-events: none; }
 .hero-copy { position: relative; z-index: 2; max-width: 540px; }
 .eyebrow, .section-kicker { color: var(--red-2); font-size: 10px; font-weight: 900; letter-spacing: .2em; display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; }
@@ -88,7 +88,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .catalog-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .product-card { background: linear-gradient(145deg, #171717, #101010); border: 1px solid var(--line); min-width: 0; transition: transform .25s ease, border-color .25s ease; overflow: hidden; }
 .product-card:hover { transform: translateY(-3px); border-color: rgba(255,255,255,.18); }
-.product-image { border: 0; padding: 0; width: 100%; height: 210px; position: relative; display: block; cursor: pointer; background-image: linear-gradient(180deg, transparent 45%, rgba(0,0,0,.75)), url("/redline-hero.png"); background-size: 310%; }
+.product-image { border: 0; padding: 0; width: 100%; height: 210px; position: relative; display: block; cursor: pointer; background-image: linear-gradient(180deg, transparent 45%, rgba(0,0,0,.75)), url("/redlineclub/redline-hero.png"); background-size: 310%; }
 .product-wheel { background-position: 75% 22%; }
 .product-carbon { background-position: 58% 82%; }
 .product-brake { background-position: 98% 55%; }
@@ -159,7 +159,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .modal-backdrop { position: fixed; z-index: 70; inset: 0; background: rgba(0,0,0,.84); backdrop-filter: blur(7px); display: flex; align-items: flex-end; justify-content: center; padding-top: 30px; }
 .product-modal { width: min(620px, 100%); max-height: 94vh; overflow-y: auto; background: #101010; border: 1px solid var(--line); box-shadow: 0 -24px 90px rgba(0,0,0,.7); }
-.modal-visual { height: 310px; position: relative; background-image: linear-gradient(180deg, transparent 50%, #101010), url("/redline-hero.png"); background-size: 290%; }
+.modal-visual { height: 310px; position: relative; background-image: linear-gradient(180deg, transparent 50%, #101010), url("/redlineclub/redline-hero.png"); background-size: 290%; }
 .modal-close, .modal-heart { position: absolute; top: 16px; width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16); background: rgba(5,5,5,.7); display: grid; place-items: center; cursor: pointer; }
 .modal-close { left: 16px; }
 .modal-heart { right: 16px; }
@@ -203,7 +203,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inner-page { min-height: calc(100vh - 72px); }
 .narrow-page { max-width: 760px; }
 .inner-hero { min-height: 290px; margin: -64px -24px 36px; padding: 72px max(6vw,24px) 34px; display: flex; flex-direction: column; justify-content: flex-end; border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
-.group-hero { background: linear-gradient(90deg, rgba(4,4,4,.35), rgba(4,4,4,.68)), url("/redline-hero.png") center 58% / cover; }
+.group-hero { background: linear-gradient(90deg, rgba(4,4,4,.35), rgba(4,4,4,.68)), url("/redlineclub/redline-hero.png") center 58% / cover; }
 .inner-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent, #080808); }
 .inner-hero > * { position: relative; z-index: 1; }
 .inner-hero h1 { font-size: clamp(52px, 10vw, 82px); margin: 12px 0; }
@@ -219,7 +219,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .live-count i { width: 6px; height: 6px; background: var(--red); border-radius: 50%; box-shadow: 0 0 9px var(--red); }
 .group-list { display: grid; gap: 14px; }
 .group-wide-card { display: grid; grid-template-columns: minmax(240px, 38%) 1fr; border: 1px solid var(--line); background: #111; min-height: 300px; overflow: hidden; }
-.group-wide-image { border: 0; min-height: 270px; cursor: pointer; position: relative; background-image: linear-gradient(180deg, transparent, rgba(0,0,0,.7)), url("/redline-hero.png"); background-size: 300%; }
+.group-wide-image { border: 0; min-height: 270px; cursor: pointer; position: relative; background-image: linear-gradient(180deg, transparent, rgba(0,0,0,.7)), url("/redlineclub/redline-hero.png"); background-size: 300%; }
 .group-wide-image > span { position: absolute; left: 18px; bottom: 16px; font-family: var(--font-oswald); font-size: 35px; color: var(--red-2); }
 .group-wide-body { padding: 25px; display: flex; flex-direction: column; }
 .wide-top { display: flex; justify-content: space-between; color: var(--red); font-size: 8px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
@@ -252,7 +252,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .order-number { font-size: 8px; color: #666; letter-spacing: .13em; }
 .order-head strong { font-size: 12px; }
 .order-product { display: grid; grid-template-columns: 78px 1fr; gap: 13px; padding: 16px 0; border-bottom: 1px solid var(--line); }
-.order-thumb { height: 70px; background-image: url("/redline-hero.png"); background-size: 330%; border: 1px solid var(--line); }
+.order-thumb { height: 70px; background-image: url("/redlineclub/redline-hero.png"); background-size: 330%; border: 1px solid var(--line); }
 .order-product > div:last-child { display: flex; flex-direction: column; justify-content: center; }
 .order-product b { font-size: 12px; }
 .order-product span { color: #666; font-size: 8px; margin-top: 3px; }
@@ -283,7 +283,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .seller-summary span, .admin-metrics span { color: #666; font-size: 8px; }
 .seller-summary b { font-family: var(--font-oswald); font-size: 25px; margin-top: 4px; }
 .listing-card { display: grid; grid-template-columns: 90px 1fr auto; gap: 13px; background: #111; border: 1px solid var(--line); padding: 13px; margin-bottom: 15px; }
-.listing-thumb { min-height: 94px; background-image: url("/redline-hero.png"); background-size: 350%; }
+.listing-thumb { min-height: 94px; background-image: url("/redlineclub/redline-hero.png"); background-size: 350%; }
 .listing-card > div:nth-child(2) { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .status-on, .status-off { font-size: 7px; letter-spacing: .12em; color: var(--green); margin-bottom: 5px; }
 .status-off { color: var(--red); }
@@ -354,7 +354,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .admin-metrics small { color: var(--green); font-size: 8px; }
 .procurement-card, .admin-table-card, .settings-card { background: #111; border: 1px solid var(--line); }
 .procurement-head { display: grid; grid-template-columns: 74px 1fr auto; gap: 13px; padding: 16px; align-items: center; border-bottom: 1px solid var(--line); }
-.admin-product-thumb { height: 68px; background-image: url("/redline-hero.png"); background-size: 330%; }
+.admin-product-thumb { height: 68px; background-image: url("/redlineclub/redline-hero.png"); background-size: 330%; }
 .admin-status { color: var(--red); font-size: 7px; letter-spacing: .12em; }
 .admin-status.payment { color: #e5a953; }
 .admin-status.success { color: var(--green); }

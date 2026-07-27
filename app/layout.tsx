@@ -21,23 +21,24 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://poznaysebya.site"),
   title: "REDLINE CLUB — автотовары в Telegram",
   description:
     "Премиальный маркетплейс автотоваров и групповых закупок внутри Telegram.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/redlineclub/favicon.svg",
+    shortcut: "/redlineclub/favicon.svg",
   },
   openGraph: {
     title: "REDLINE CLUB",
     description: "Автотовары. Проверенные продавцы. Выгодные групповые закупки.",
-    images: [{ url: "/og.png", width: 1536, height: 1024 }],
+    images: [{ url: "/redlineclub/og.png", width: 1536, height: 1024 }],
   },
   twitter: {
     card: "summary_large_image",
     title: "REDLINE CLUB",
     description: "Премиальный автомаркет внутри Telegram.",
-    images: ["/og.png"],
+    images: ["/redlineclub/og.png"],
   },
 };
 

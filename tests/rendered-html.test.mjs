@@ -7,7 +7,7 @@ async function render() {
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request("http://localhost/redlineclub", {
       headers: { accept: "text/html" },
     }),
     {

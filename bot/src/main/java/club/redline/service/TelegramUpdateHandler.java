@@ -1,36 +1,19 @@
-package club.redline.web;
+package club.redline.service;
 
-import club.redline.config.RedlineProperties;
-import club.redline.service.MarketplaceService;
-import club.redline.service.TelegramApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.stereotype.Component;
 
-@RestController
-@RequestMapping("/api/telegram")
-public class TelegramWebhookController {
+@Component
+public class TelegramUpdateHandler {
     private final TelegramApiClient telegram;
     private final MarketplaceService marketplace;
-    private final RedlineProperties properties;
 
-    public TelegramWebhookController(TelegramApiClient telegram, MarketplaceService marketplace,
-                                     RedlineProperties properties) {
+    public TelegramUpdateHandler(TelegramApiClient telegram, MarketplaceService marketplace) {
         this.telegram = telegram;
         this.marketplace = marketplace;
-        this.properties = properties;
     }
 
-    @PostMapping("/webhook/{secret}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void webhook(@PathVariable String secret,
-                        @RequestHeader(value = "X-Telegram-Bot-Api-Secret-Token", required = false)
-                        String secretHeader,
-                        @RequestBody JsonNode update) {
-        if (!properties.telegram().webhookSecret().equals(secret) ||
-                !properties.telegram().webhookSecret().equals(secretHeader)) {
-            throw new UnauthorizedException();
-        }
+    public void handle(JsonNode update) {
         JsonNode memberUpdate = update.path("my_chat_member");
         if (!memberUpdate.isMissingNode()) {
             handleMembership(memberUpdate);
@@ -58,11 +41,13 @@ public class TelegramWebhookController {
         long groupId = chat.path("id").asLong();
         int threadId = telegram.createShopTopic(groupId);
         long ownerId = update.path("from").path("id").asLong();
-        marketplace.registerGroup(groupId, chat.path("title").asText("Автоклуб"), ownerId, threadId);
+        marketplace.registerGroup(
+                groupId,
+                chat.path("title").asText("Автоклуб"),
+                ownerId,
+                threadId
+        );
         telegram.sendMessage(groupId,
                 "<b>REDLINE подключён.</b>\nТема «Магазин» создана. Откройте Mini App для настройки.");
     }
-
-    @ResponseStatus(HttpStatus.UNAUTHORIZED)
-    private static class UnauthorizedException extends RuntimeException {}
 }
