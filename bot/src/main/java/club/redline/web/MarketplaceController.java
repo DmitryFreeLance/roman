@@ -285,7 +285,7 @@ public class MarketplaceController {
     }
 
     @PostMapping("/orders/{id}/review")
-    @ResponseStatus(HttpStatus.CREATED)
+    @ResponseStatus(HttpStatus.NO_CONTENT)
     public void createReview(
             @RequestHeader("X-Telegram-Init-Data") String initData,
             @PathVariable long id,

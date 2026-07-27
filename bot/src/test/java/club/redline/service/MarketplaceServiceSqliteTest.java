@@ -138,6 +138,7 @@ class MarketplaceServiceSqliteTest {
         marketplace.advanceOrder(orderId, sellerId, "SHIPPED");
         marketplace.advanceOrder(orderId, firstBuyerId, "COMPLETED");
         marketplace.createReview(firstBuyerId, orderId, 5);
+        marketplace.createReview(firstBuyerId, orderId, 5);
 
         assertThat(jdbc.queryForObject(
                 "SELECT status FROM orders WHERE id = ?", String.class, orderId

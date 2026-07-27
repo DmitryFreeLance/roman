@@ -532,7 +532,9 @@ export function RedlineApp() {
       throw new Error(message);
     }
     if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
+    const responseText = await response.text();
+    if (!responseText) return undefined as T;
+    return JSON.parse(responseText) as T;
   }
 
   async function loadBootstrap(data = initData) {
@@ -1452,19 +1454,23 @@ function ProductCard({
         <span className="seller-line"><BadgeCheck size={12} />{product.storeName}</span>
         <button className="product-title" onClick={onOpen}>{product.title}</button>
         <p>{product.description}</p>
-        <div className="rating-line">
-          <Star size={13} fill={product.reviewCount ? "currentColor" : "none"} />
-          <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
-          <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Нет оценок"}</span>
-        </div>
-        {product.kind === "group" && product.targetCount && (
-          <div className="group-progress">
-            <div className="progress-label"><span>Забронировали</span><b>{product.reservedCount} из {product.targetCount}</b></div>
-            <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
+        <div className="product-card-tail">
+          <div className="rating-line">
+            <Star size={13} fill={product.reviewCount ? "currentColor" : "none"} />
+            <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
+            <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Нет оценок"}</span>
           </div>
-        )}
-        <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
-        <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
+          <div className="card-progress-slot">
+            {product.kind === "group" && product.targetCount ? (
+              <div className="group-progress">
+                <div className="progress-label"><span>Забронировали</span><b>{product.reservedCount} из {product.targetCount}</b></div>
+                <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
+              </div>
+            ) : null}
+          </div>
+          <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
+          <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
+        </div>
       </div>
     </article>
   );
@@ -1955,10 +1961,11 @@ function OrdersPage({
         method: "POST",
         body: JSON.stringify({ rating }),
       });
-      await Promise.all([
-        loadOrders(),
-        onCatalogChanged ? onCatalogChanged() : Promise.resolve(),
-      ]);
+      setOrders((current) =>
+        current.map((item) =>
+          item.id === order.id ? { ...item, reviewRating: rating } : item,
+        ),
+      );
       onToast("Спасибо! Оценка сохранена");
     } catch (reviewError) {
       onToast(
@@ -1966,7 +1973,11 @@ function OrdersPage({
           ? reviewError.message
           : "Не удалось сохранить оценку",
       );
+      return;
     }
+    void onCatalogChanged?.().catch(() => {
+      // The review is already saved; the catalog will refresh on the next visit.
+    });
   }
 
   const shownOrders =
@@ -2084,16 +2095,14 @@ function ReportSellerModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className="modal-backdrop report-modal-backdrop"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       <form
         className="report-modal"
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={dismissKeyboard}
         onSubmit={async (event) => {
           event.preventDefault();
-          const active = document.activeElement;
-          if (active instanceof HTMLElement) active.blur();
-          window.Telegram?.WebApp?.hideKeyboard?.();
           setSaving(true);
           setError("");
           try {
@@ -2112,7 +2121,7 @@ function ReportSellerModal({
         <div className="report-modal-icon"><AlertTriangle size={24} /></div>
         <h2>{title}</h2>
         <p>{subtitle}</p>
-        <label><span>Причина</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={5} minLength={5} required placeholder="Опишите проблему с продавцом или заказом" /></label>
+        <label><span>Причина</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={5} minLength={5} required enterKeyHint="done" placeholder="Опишите проблему с продавцом или заказом" /></label>
         {error && <p className="form-error">{error}</p>}
         <div className="report-modal-actions">
           <button type="button" className="outline-action" onClick={onClose}>Отменить</button>

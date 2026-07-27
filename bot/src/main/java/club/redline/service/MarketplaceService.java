@@ -624,7 +624,14 @@ public class MarketplaceService {
                 ((Number) order.get("seller_telegram_id")).longValue(),
                 buyerTelegramId, rating);
         if (inserted == 0) {
-            throw new IllegalStateException("Вы уже оценили этот заказ");
+            Integer existingRating = jdbc.queryForObject(
+                    "SELECT rating FROM reviews WHERE order_id = ?",
+                    Integer.class, orderId
+            );
+            // A client can safely retry when the first response was lost after commit.
+            if (existingRating == null || existingRating != rating) {
+                throw new IllegalStateException("Вы уже оценили этот заказ");
+            }
         }
     }
 
