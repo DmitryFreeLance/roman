@@ -33,7 +33,8 @@ class SqliteSchemaInitializerTest {
                 SELECT COUNT(*) FROM sqlite_master
                 WHERE type = 'table' AND name IN (
                   'users', 'telegram_groups', 'stores', 'products',
-                  'group_buys', 'group_buy_reservations', 'orders', 'reviews'
+                  'group_buys', 'group_buy_reservations', 'orders', 'reviews',
+                  'notifications'
                 )
                 """, Integer.class);
         Integer settings = jdbc.queryForObject(
@@ -48,7 +49,7 @@ class SqliteSchemaInitializerTest {
                 """, Integer.class);
 
         assertThat(foreignKeys).isEqualTo(1);
-        assertThat(tables).isEqualTo(8);
+        assertThat(tables).isEqualTo(9);
         assertThat(settings).isEqualTo(1);
         assertThat(businessRows).isZero();
     }

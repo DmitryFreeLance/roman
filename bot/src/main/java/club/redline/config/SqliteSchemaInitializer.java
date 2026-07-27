@@ -34,6 +34,8 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
 
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         ensureUserProfileColumns(jdbc);
+        ensureStoreColumns(jdbc);
+        ensureProductColumns(jdbc);
 
         RedlineProperties.Marketplace marketplace = properties.marketplace();
         jdbc.update("""
@@ -49,9 +51,7 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
     }
 
     private void ensureUserProfileColumns(JdbcTemplate jdbc) {
-        Set<String> columns = jdbc.queryForList("PRAGMA table_info(users)").stream()
-                .map(row -> String.valueOf(row.get("name")))
-                .collect(Collectors.toSet());
+        Set<String> columns = columns(jdbc, "users");
         if (!columns.contains("display_name")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN display_name TEXT");
         }
@@ -64,5 +64,34 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("selected_group_id")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN selected_group_id INTEGER");
         }
+    }
+
+    private void ensureStoreColumns(JdbcTemplate jdbc) {
+        Set<String> columns = columns(jdbc, "stores");
+        if (!columns.contains("payment_details")) {
+            jdbc.execute("ALTER TABLE stores ADD COLUMN payment_details TEXT");
+        }
+        jdbc.update("""
+                UPDATE stores
+                SET payment_details = COALESCE(
+                  NULLIF(payment_details, ''),
+                  NULLIF(payment_card, ''),
+                  NULLIF(payment_phone, '')
+                )
+                WHERE payment_details IS NULL OR payment_details = ''
+                """);
+    }
+
+    private void ensureProductColumns(JdbcTemplate jdbc) {
+        Set<String> columns = columns(jdbc, "products");
+        if (!columns.contains("deleted")) {
+            jdbc.execute("ALTER TABLE products ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
+    }
+
+    private Set<String> columns(JdbcTemplate jdbc, String table) {
+        return jdbc.queryForList("PRAGMA table_info(" + table + ")").stream()
+                .map(row -> String.valueOf(row.get("name")))
+                .collect(Collectors.toSet());
     }
 }

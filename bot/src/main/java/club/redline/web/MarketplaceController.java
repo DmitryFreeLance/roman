@@ -8,6 +8,7 @@ import club.redline.service.ImageStorageService;
 import club.redline.service.MarketplaceService.NewProduct;
 import club.redline.service.MarketplaceService.NewStore;
 import club.redline.service.MarketplaceService.ReservationResult;
+import club.redline.service.MarketplaceService.UpdateProduct;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -127,6 +128,35 @@ public class MarketplaceController {
         );
     }
 
+    @PutMapping("/products/{productId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateProduct(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId,
+            @Valid @RequestBody UpdateProductRequest request) {
+        marketplace.updateSellerProduct(registered(initData).id(), productId,
+                new UpdateProduct(
+                        request.title(), request.description(), request.category(),
+                        request.stock(), request.sellerPriceKopecks(),
+                        request.imageUrlsJson()
+                ));
+    }
+
+    @DeleteMapping("/products/{productId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteProduct(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId) {
+        marketplace.deleteSellerProduct(registered(initData).id(), productId);
+    }
+
+    @GetMapping("/groups/{telegramGroupId}/my-store")
+    public Map<String, Object> myStore(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.myStore(registered(initData).id(), telegramGroupId);
+    }
+
     @PostMapping("/stores")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createStore(@RequestHeader("X-Telegram-Init-Data") String initData,
@@ -134,7 +164,7 @@ public class MarketplaceController {
         TelegramUser user = registered(initData);
         long id = marketplace.createStore(user.id(), new NewStore(
                 request.groupId(), request.name(), request.description(),
-                request.paymentPhone(), request.paymentCard()
+                request.paymentDetails()
         ));
         return Map.of("id", id);
     }
@@ -215,6 +245,27 @@ public class MarketplaceController {
     public void advanceOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
                              @PathVariable long id, @PathVariable String status) {
         marketplace.advanceOrder(id, registered(initData).id(), status.toUpperCase());
+    }
+
+    @GetMapping("/me/notifications")
+    public List<Map<String, Object>> notifications(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        return marketplace.notifications(registered(initData).id());
+    }
+
+    @PutMapping("/me/notifications/{id}/read")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markNotificationRead(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id) {
+        marketplace.markNotificationRead(registered(initData).id(), id);
+    }
+
+    @PutMapping("/me/notifications/read-all")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markAllNotificationsRead(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        marketplace.markAllNotificationsRead(registered(initData).id());
     }
 
     @PutMapping("/groups/{telegramGroupId}/commission")
@@ -377,8 +428,15 @@ public class MarketplaceController {
             long groupId,
             @NotBlank String name,
             String description,
-            String paymentPhone,
-            String paymentCard
+            @NotBlank String paymentDetails
+    ) {}
+    public record UpdateProductRequest(
+            @NotBlank String title,
+            @NotBlank String description,
+            @NotBlank String category,
+            @Positive int stock,
+            @Positive long sellerPriceKopecks,
+            @NotBlank String imageUrlsJson
     ) {}
     public record ProductActiveRequest(boolean active) {}
     public record ReserveRequest(String phone) {}

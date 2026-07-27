@@ -68,7 +68,7 @@ class MarketplaceServiceSqliteTest {
                 Long.class, -100123L
         );
         marketplace.createStore(sellerId, new MarketplaceService.NewStore(
-                groupId, "Garage", "Test store", "+70000000000", "0000"
+                groupId, "Garage", "Test store", "+70000000000 / карта 0000"
         ));
         long productId = marketplace.createProduct(sellerId, new MarketplaceService.NewProduct(
                 groupId, "Brake kit", "Track brake kit", "Brakes",
@@ -111,7 +111,8 @@ class MarketplaceServiceSqliteTest {
                 .singleElement()
                 .satisfies(row -> {
                     assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
-                    assertThat(row.get("payment_phone")).isEqualTo("+70000000000");
+                    assertThat(row.get("payment_details"))
+                            .isEqualTo("+70000000000 / карта 0000");
                 });
         assertThat(marketplace.salesOrders(sellerId, -100123L))
                 .singleElement()
@@ -127,6 +128,25 @@ class MarketplaceServiceSqliteTest {
         assertThat(jdbc.queryForObject(
                 "SELECT status FROM orders WHERE id = ?", String.class, orderId
         )).isEqualTo("COMPLETED");
+        assertThat(marketplace.notifications(sellerId)).isNotEmpty();
+
+        long cancelledOrderId = marketplace.createOrder(secondBuyerId, regularProductId);
+        marketplace.advanceOrder(cancelledOrderId, secondBuyerId, "CANCELLED");
+        assertThat(jdbc.queryForObject(
+                "SELECT stock FROM products WHERE id = ?", Integer.class, regularProductId
+        )).isEqualTo(2);
+
+        marketplace.updateSellerProduct(
+                sellerId,
+                regularProductId,
+                new MarketplaceService.UpdateProduct(
+                        "Brake fluid Pro", "Updated fluid", "Brakes",
+                        4, 120_000L, "[]"
+                )
+        );
+        assertThat(marketplace.sellerProducts(sellerId, -100123L))
+                .anySatisfy(row ->
+                        assertThat(row.get("title")).isEqualTo("Brake fluid Pro"));
         assertThat(jdbc.queryForObject(
                 "SELECT commission_debt_kopecks FROM users WHERE telegram_id = ?",
                 Long.class, sellerId
@@ -137,6 +157,8 @@ class MarketplaceServiceSqliteTest {
                 .filteredOn(row -> ((Number) row.get("id")).longValue() == regularProductId)
                 .singleElement()
                 .satisfies(row -> assertThat(row.get("active")).isEqualTo(0));
+        marketplace.deleteSellerProduct(sellerId, regularProductId);
+        assertThat(marketplace.sellerProducts(sellerId, -100123L)).hasSize(1);
 
         marketplace.updateGlobalSettings(0, 50_000L);
         assertThat(((Number) marketplace.globalSettings()

@@ -80,7 +80,7 @@ public class MarketplaceService {
                 LEFT JOIN reviews r ON r.product_id = p.id
                 LEFT JOIN group_buys gb ON gb.product_id = p.id
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
-                WHERE g.telegram_group_id = ? AND p.active = 1
+                WHERE g.telegram_group_id = ? AND p.active = 1 AND p.deleted = 0
                   AND s.globally_banned = 0
                   AND NOT EXISTS (
                     SELECT 1 FROM group_seller_bans b
@@ -116,6 +116,7 @@ public class MarketplaceService {
                 LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
                 LEFT JOIN orders o ON o.product_id = p.id
                 WHERE g.telegram_group_id = ? AND st.seller_telegram_id = ?
+                  AND p.deleted = 0
                 GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
                          st.id, st.name, gb.id, gb.target_count, gb.status
                 ORDER BY p.created_at DESC
@@ -127,7 +128,7 @@ public class MarketplaceService {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.group_id FROM products p
                 JOIN stores st ON st.id = p.store_id
-                WHERE p.id = ? AND st.seller_telegram_id = ?
+                WHERE p.id = ? AND st.seller_telegram_id = ? AND p.deleted = 0
                 """, productId, sellerTelegramId);
         if (active) {
             assertSellerCanTrade(
@@ -139,6 +140,45 @@ public class MarketplaceService {
                 UPDATE products SET active = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """, active, productId);
+    }
+
+    @Transactional
+    public void updateSellerProduct(long sellerTelegramId, long productId,
+                                    UpdateProduct input) {
+        Integer categoryExists = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM categories WHERE name = ? AND active = 1
+                """, Integer.class, input.category());
+        if (categoryExists == null || categoryExists == 0) {
+            throw new IllegalArgumentException("Category is not available");
+        }
+        int updated = jdbc.update("""
+                UPDATE products
+                SET title = ?, description = ?, category = ?, stock = ?,
+                    seller_price_kopecks = ?, image_urls = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND deleted = 0 AND store_id IN (
+                  SELECT id FROM stores WHERE seller_telegram_id = ?
+                )
+                """, input.title(), input.description(), input.category(),
+                input.stock(), input.sellerPriceKopecks(), input.imageUrlsJson(),
+                productId, sellerTelegramId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Product not found or access denied");
+        }
+    }
+
+    @Transactional
+    public void deleteSellerProduct(long sellerTelegramId, long productId) {
+        int updated = jdbc.update("""
+                UPDATE products SET deleted = 1, active = 0,
+                  updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND deleted = 0 AND store_id IN (
+                  SELECT id FROM stores WHERE seller_telegram_id = ?
+                )
+                """, productId, sellerTelegramId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Product not found or access denied");
+        }
     }
 
     @Transactional
@@ -182,25 +222,39 @@ public class MarketplaceService {
     public long createStore(long sellerTelegramId, NewStore input) {
         Long storeId = jdbc.queryForObject("""
                 INSERT INTO stores
-                  (group_id, seller_telegram_id, name, description, payment_phone, payment_card)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (group_id, seller_telegram_id, name, description, payment_details)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                   name = EXCLUDED.name,
                   description = EXCLUDED.description,
-                  payment_phone = EXCLUDED.payment_phone,
-                  payment_card = EXCLUDED.payment_card,
+                  payment_details = EXCLUDED.payment_details,
                   active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
-                input.description(), input.paymentPhone(), input.paymentCard());
+                input.description(), input.paymentDetails());
         return storeId;
+    }
+
+    public Map<String, Object> myStore(long sellerTelegramId, long telegramGroupId) {
+        return jdbc.queryForMap("""
+                SELECT st.id, st.name, st.description,
+                       COALESCE(
+                         NULLIF(st.payment_details, ''),
+                         NULLIF(st.payment_card, ''),
+                         NULLIF(st.payment_phone, '')
+                       ) AS payment_details
+                FROM stores st
+                JOIN telegram_groups g ON g.id = st.group_id
+                WHERE st.seller_telegram_id = ? AND g.telegram_group_id = ?
+                  AND st.active = 1
+                """, sellerTelegramId, telegramGroupId);
     }
 
     public Map<String, Object> profile(long telegramId) {
         return jdbc.queryForMap("""
                 SELECT telegram_id, username, first_name, last_name,
                        display_name, phone, selected_group_id, registered, seller_blocked,
-                       commission_debt_kopecks, debt_limit_kopecks
+                       bot_commission_percent, commission_debt_kopecks, debt_limit_kopecks
                 FROM users WHERE telegram_id = ?
                 """, telegramId);
     }
@@ -237,7 +291,8 @@ public class MarketplaceService {
                        g.shop_thread_id, g.commission_percent,
                        COUNT(DISTINCT p.id) AS product_count
                 FROM telegram_groups g
-                LEFT JOIN products p ON p.group_id = g.id AND p.active = 1
+                LEFT JOIN products p ON p.group_id = g.id
+                  AND p.active = 1 AND p.deleted = 0
                 WHERE g.active = 1
                 GROUP BY g.id
                 ORDER BY g.created_at DESC
@@ -388,7 +443,7 @@ public class MarketplaceService {
     public long createOrder(long buyerTelegramId, long productId) {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.id, p.stock, p.seller_price_kopecks, p.group_id,
-                       p.active, st.seller_telegram_id, u.bot_commission_percent,
+                       p.active, p.deleted, st.seller_telegram_id, u.bot_commission_percent,
                        g.commission_percent
                 FROM products p
                 JOIN stores st ON st.id = p.store_id
@@ -398,7 +453,7 @@ public class MarketplaceService {
                 """, productId);
         long sellerId = ((Number) product.get("seller_telegram_id")).longValue();
         long groupId = ((Number) product.get("group_id")).longValue();
-        if (!asBoolean(product.get("active"))) {
+        if (!asBoolean(product.get("active")) || asBoolean(product.get("deleted"))) {
             throw new IllegalStateException("Product is not available");
         }
         if (sellerId == buyerTelegramId) {
@@ -431,7 +486,11 @@ public class MarketplaceService {
                        o.commission_kopecks, o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
                        st.id AS store_id, st.name AS store_name,
-                       st.payment_phone, st.payment_card,
+                       COALESCE(
+                         NULLIF(st.payment_details, ''),
+                         NULLIF(st.payment_card, ''),
+                         NULLIF(st.payment_phone, '')
+                       ) AS payment_details,
                        seller.telegram_id AS seller_telegram_id,
                        seller.username AS seller_username,
                        COALESCE(NULLIF(seller.display_name, ''),
@@ -469,10 +528,38 @@ public class MarketplaceService {
                 """, sellerTelegramId, telegramGroupId);
     }
 
+    public List<Map<String, Object>> notifications(long telegramId) {
+        return jdbc.queryForList("""
+                SELECT id, type, title, body, entity_type, entity_id,
+                       is_read, created_at
+                FROM notifications
+                WHERE user_telegram_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 200
+                """, telegramId);
+    }
+
+    @Transactional
+    public void markNotificationRead(long telegramId, long notificationId) {
+        jdbc.update("""
+                UPDATE notifications SET is_read = 1
+                WHERE id = ? AND user_telegram_id = ?
+                """, notificationId, telegramId);
+    }
+
+    @Transactional
+    public void markAllNotificationsRead(long telegramId) {
+        jdbc.update("""
+                UPDATE notifications SET is_read = 1
+                WHERE user_telegram_id = ?
+                """, telegramId);
+    }
+
     @Transactional
     public void advanceOrder(long orderId, long actorTelegramId, String targetStatus) {
         Map<String, Object> order = jdbc.queryForMap("""
-                SELECT buyer_telegram_id, seller_telegram_id, status, commission_kopecks
+                SELECT buyer_telegram_id, seller_telegram_id, product_id,
+                       status, commission_kopecks
                 FROM orders WHERE id = ?
                 """, orderId);
         String current = String.valueOf(order.get("status"));
@@ -482,11 +569,27 @@ public class MarketplaceService {
             case "PAID" -> actorTelegramId == buyer && "AWAITING_PAYMENT".equals(current);
             case "SHIPPED" -> actorTelegramId == seller && "PAID".equals(current);
             case "COMPLETED" -> actorTelegramId == buyer && "SHIPPED".equals(current);
+            case "CANCELLED" ->
+                    (actorTelegramId == buyer || actorTelegramId == seller)
+                            && ("AWAITING_PAYMENT".equals(current) || "PAID".equals(current));
             default -> false;
         };
         if (!valid) throw new IllegalStateException("Invalid order status transition");
-        jdbc.update("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                targetStatus, orderId);
+        int updated = jdbc.update("""
+                UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = ?
+                """, targetStatus, orderId, current);
+        if (updated == 0) {
+            throw new IllegalStateException("Order status was already changed");
+        }
+        if ("CANCELLED".equals(targetStatus)) {
+            jdbc.update("UPDATE products SET stock = stock + 1 WHERE id = ?",
+                    ((Number) order.get("product_id")).longValue());
+            long recipient = actorTelegramId == buyer ? seller : buyer;
+            notifyUser(recipient, "<b>Заказ отменён.</b>\nЗаказ #" + orderId
+                    + " отменён второй стороной.");
+            return;
+        }
         if ("PAID".equals(targetStatus)) {
             notifyUser(seller,
                     "<b>Покупатель отметил оплату.</b>\nПроверьте поступление и отправьте товар.");
@@ -556,7 +659,9 @@ public class MarketplaceService {
                 SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
                        g.shop_thread_id, g.commission_percent, g.active,
                        COUNT(DISTINCT s.id) AS stores,
-                       COUNT(DISTINCT p.id) FILTER (WHERE p.active = 1) AS product_count,
+                       COUNT(DISTINCT p.id) FILTER (
+                         WHERE p.active = 1 AND p.deleted = 0
+                       ) AS product_count,
                        COUNT(DISTINCT o.id) FILTER (WHERE o.status = 'COMPLETED') AS completed_orders
                 FROM telegram_groups g
                 LEFT JOIN stores s ON s.group_id = g.id
@@ -572,7 +677,8 @@ public class MarketplaceService {
         return jdbc.queryForMap("""
                 SELECT
                   (SELECT COUNT(*) FROM products p
-                   WHERE p.group_id = g.id AND p.active = 1) AS products,
+                   WHERE p.group_id = g.id AND p.active = 1
+                     AND p.deleted = 0) AS products,
                   (SELECT COUNT(*) FROM stores s
                    WHERE s.group_id = g.id AND s.active = 1) AS sellers,
                   (SELECT COUNT(*) FROM orders o
@@ -748,6 +854,17 @@ public class MarketplaceService {
     }
 
     private void notifyUser(long telegramId, String text) {
+        String plain = text.replaceAll("<[^>]+>", "").strip();
+        String[] lines = plain.split("\\R", 2);
+        String title = lines.length > 0 && !lines[0].isBlank()
+                ? lines[0].strip()
+                : "REDLINE";
+        String body = lines.length > 1 ? lines[1].strip() : title;
+        jdbc.update("""
+                INSERT INTO notifications
+                  (user_telegram_id, type, title, body)
+                VALUES (?, 'MARKETPLACE', ?, ?)
+                """, telegramId, title, body);
         try {
             telegram.sendMessage(telegramId, text);
         } catch (RuntimeException notificationError) {
@@ -792,7 +909,10 @@ public class MarketplaceService {
     public record NewProduct(long groupId, String title, String description, String category,
                              int stock, long sellerPriceKopecks, String kind,
                              String imageUrlsJson, Integer targetCount, Integer collectionDays) {}
+    public record UpdateProduct(String title, String description, String category,
+                                int stock, long sellerPriceKopecks,
+                                String imageUrlsJson) {}
     public record NewStore(long groupId, String name, String description,
-                           String paymentPhone, String paymentCard) {}
+                           String paymentDetails) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
 }

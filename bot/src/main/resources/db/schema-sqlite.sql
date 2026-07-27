@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS stores (
   description TEXT,
   payment_phone TEXT,
   payment_card TEXT,
+  payment_details TEXT,
   rating REAL NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   UNIQUE (group_id, seller_telegram_id)
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS products (
     CHECK (kind IN ('REGULAR', 'GROUP_BUY')),
   image_urls TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(image_urls)),
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -146,6 +148,21 @@ CREATE INDEX IF NOT EXISTS orders_buyer_idx
   ON orders(buyer_telegram_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_seller_idx
   ON orders(seller_telegram_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id INTEGER,
+  is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS notifications_user_idx
+  ON notifications(user_telegram_id, is_read, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

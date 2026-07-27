@@ -44,6 +44,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .group-switcher small { color: #696969; font-size: 8px; font-weight: 800; letter-spacing: .18em; }
 .group-switcher strong { font-size: 12px; margin-top: 3px; }
 .top-actions { justify-self: end; display: flex; gap: 8px; }
+.notification-button { position: relative; }
+.notification-button > em {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--red);
+  color: #fff;
+  border: 2px solid #0d0d0d;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 900;
+}
 .alert-button { position: relative; }
 .alert-button i { position: absolute; width: 6px; height: 6px; background: var(--red); border: 1px solid #111; border-radius: 50%; top: 8px; right: 8px; }
 .avatar-button { width: 42px; height: 42px; border-radius: 50%; font-weight: 800; background: linear-gradient(145deg, #301014, #111); }
@@ -335,7 +353,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .group-fields > p svg { color: var(--red); flex: 0 0 auto; }
 .price-preview { background: #181818; border-left: 2px solid var(--red); padding: 13px; display: grid; grid-template-columns: 1fr auto; }
 .price-preview span { color: #777; font-size: 9px; }
-.price-preview strong { font-family: var(--font-oswald); font-size: 22px; }
+.price-preview strong,
+.price-preview b { font-family: var(--font-oswald); font-size: 22px; }
 .price-preview small { grid-column: 1/-1; color: #555; font-size: 8px; margin-top: 3px; }
 .checkbox-label { flex-direction: row !important; align-items: center; }
 .checkbox-label input { width: 16px; accent-color: var(--red); }
@@ -756,11 +775,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: #ff6970;
   border-color: rgba(227,27,35,.28);
 }
-.storefront-heading,
-.store-products-heading {
+.moderation-thumb {
+  width: 64px;
+  height: 52px;
+  display: block;
+  border: 1px solid var(--line);
+}
+.storefront-heading {
   display: flex;
   align-items: end;
   justify-content: space-between;
+  margin: 8px 0 13px;
+}
+.store-products-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   margin: 8px 0 13px;
 }
 .storefront-heading h3,
@@ -828,9 +859,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .storefront-card b { margin: 9px 3px 0; font-size: 10px; overflow-wrap: anywhere; }
 .storefront-card small { margin: 3px; color: #6d6d6d; font-size: 7px; }
-.store-products-heading { justify-content: flex-start; margin-top: 0; }
+.store-products-heading { margin-top: 0; }
 .listings-create { width: min(300px, 100%); margin: 0 0 18px auto; }
-.seller-listing-actions { display: flex; align-items: center; }
+.seller-listing-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 270px; }
 .seller-listing-actions button {
   min-width: 86px;
   height: 38px;
@@ -840,7 +871,61 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 0 12px;
   font-size: 8px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
+.seller-listing-actions button.danger-action { color: #ff6970; border-color: rgba(227,27,35,.32); }
+.store-bound-card,
+.store-setup-fields {
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(227,27,35,.08), #121212 55%);
+  padding: 17px;
+}
+.store-bound-card { display: flex; flex-direction: column; gap: 5px; }
+.store-bound-card > span,
+.store-setup-fields > div > span { color: var(--red-2); font-size: 7px; letter-spacing: .14em; }
+.store-bound-card > b,
+.store-setup-fields > div > b { font-family: var(--font-oswald); font-size: 21px; text-transform: uppercase; }
+.store-bound-card p,
+.store-setup-fields > div > p { color: #777; font-size: 9px; line-height: 1.5; margin: 0; }
+.store-setup-fields { display: flex; flex-direction: column; gap: 14px; }
+.store-setup-fields > div { display: flex; flex-direction: column; gap: 5px; }
+.order-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+.order-tabs button {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  background: #141414;
+  color: #777;
+  font-size: 8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.order-tabs button.active { color: #fff; border-color: rgba(227,27,35,.65); background: rgba(227,27,35,.1); }
+.cancelled-order-note { padding: 13px; margin: 12px 0; border-left: 2px solid #777; background: #171717; color: #888; font-size: 9px; }
+.cancel-order-action { margin-top: 8px; color: #ff777d; border-color: rgba(227,27,35,.32); }
+.edit-listing-modal { overflow-y: auto; padding: 24px; }
+.notification-list { display: flex; flex-direction: column; gap: 8px; }
+.notifications-read-all { width: min(260px, 100%); margin: 0 0 16px auto; }
+.notification-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  background: #121212;
+  color: #aaa;
+  text-align: left;
+  cursor: pointer;
+}
+.notification-card.unread { border-left: 3px solid var(--red); background: linear-gradient(90deg, rgba(227,27,35,.08), #121212 35%); }
+.notification-card > i { width: 34px; height: 34px; display: grid; place-items: center; background: #211214; color: var(--red-2); font-style: normal; }
+.notification-card > span { min-width: 0; }
+.notification-card b { color: #eee; font-size: 10px; }
+.notification-card p { margin: 5px 0; color: #999; font-size: 9px; line-height: 1.55; white-space: pre-line; }
+.notification-card small { color: #555; font-size: 7px; }
 .order-head > span { color: #777; font-size: 8px; }
 .client-details {
   display: flex;
@@ -909,8 +994,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .storefront-card { min-height: 152px; }
   .storefront-cover,
   .storefront-monogram { height: 88px; }
-  .seller-listing-actions { grid-column: 1 / -1; }
-  .seller-listing-actions button { width: 100%; }
+  .moderation-thumb { width: 58px; height: 50px; }
+  .seller-listing-actions { grid-column: 1 / -1; max-width: none; }
+  .seller-listing-actions button { flex: 1 1 30%; min-width: 95px; }
   .seller-order-finance { flex-direction: column; }
   .order-card { padding: 14px; }
 }
