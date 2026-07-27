@@ -96,5 +96,50 @@ class MarketplaceServiceSqliteTest {
                 .satisfies(row -> assertThat(
                         ((Number) row.get("reserved_count")).intValue()
                 ).isEqualTo(2));
+
+        long regularProductId = marketplace.createProduct(
+                sellerId,
+                new MarketplaceService.NewProduct(
+                        groupId, "Brake fluid", "Racing fluid", "Brakes",
+                        3, 100_000L, "REGULAR", "[]", null, null
+                )
+        );
+        assertThat(marketplace.sellerProducts(sellerId, -100123L)).hasSize(2);
+
+        long orderId = marketplace.createOrder(firstBuyerId, regularProductId);
+        assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
+                    assertThat(row.get("payment_phone")).isEqualTo("+70000000000");
+                });
+        assertThat(marketplace.salesOrders(sellerId, -100123L))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
+                    assertThat(row.get("buyer_phone")).isEqualTo("+70000000001");
+                });
+
+        marketplace.advanceOrder(orderId, firstBuyerId, "PAID");
+        marketplace.advanceOrder(orderId, sellerId, "SHIPPED");
+        marketplace.advanceOrder(orderId, firstBuyerId, "COMPLETED");
+
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM orders WHERE id = ?", String.class, orderId
+        )).isEqualTo("COMPLETED");
+        assertThat(jdbc.queryForObject(
+                "SELECT commission_debt_kopecks FROM users WHERE telegram_id = ?",
+                Long.class, sellerId
+        )).isEqualTo(8_500L);
+
+        marketplace.setSellerProductActive(sellerId, regularProductId, false);
+        assertThat(marketplace.sellerProducts(sellerId, -100123L))
+                .filteredOn(row -> ((Number) row.get("id")).longValue() == regularProductId)
+                .singleElement()
+                .satisfies(row -> assertThat(row.get("active")).isEqualTo(0));
+
+        marketplace.updateGlobalSettings(0, 50_000L);
+        assertThat(((Number) marketplace.globalSettings()
+                .get("bot_commission_percent")).doubleValue()).isZero();
     }
 }

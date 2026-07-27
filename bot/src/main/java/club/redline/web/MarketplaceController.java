@@ -107,6 +107,26 @@ public class MarketplaceController {
         return Map.of("id", id);
     }
 
+    @GetMapping("/groups/{telegramGroupId}/my-products")
+    public List<Map<String, Object>> myProducts(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.sellerProducts(
+                registered(initData).id(), telegramGroupId
+        );
+    }
+
+    @PutMapping("/products/{productId}/active")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setProductActive(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId,
+            @RequestBody ProductActiveRequest request) {
+        marketplace.setSellerProductActive(
+                registered(initData).id(), productId, request.active()
+        );
+    }
+
     @PostMapping("/stores")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createStore(@RequestHeader("X-Telegram-Init-Data") String initData,
@@ -170,6 +190,24 @@ public class MarketplaceController {
     public Map<String, Long> createOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
                                          @PathVariable long productId) {
         return Map.of("id", marketplace.createOrder(registered(initData).id(), productId));
+    }
+
+    @GetMapping("/groups/{telegramGroupId}/orders/purchases")
+    public List<Map<String, Object>> purchaseOrders(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.purchaseOrders(
+                registered(initData).id(), telegramGroupId
+        );
+    }
+
+    @GetMapping("/groups/{telegramGroupId}/orders/sales")
+    public List<Map<String, Object>> salesOrders(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.salesOrders(
+                registered(initData).id(), telegramGroupId
+        );
     }
 
     @PostMapping("/orders/{id}/status/{status}")
@@ -342,6 +380,7 @@ public class MarketplaceController {
             String paymentPhone,
             String paymentCard
     ) {}
+    public record ProductActiveRequest(boolean active) {}
     public record ReserveRequest(String phone) {}
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}

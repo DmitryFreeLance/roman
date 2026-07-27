@@ -31,6 +31,7 @@ type Screen =
   | "market"
   | "group"
   | "orders"
+  | "sales"
   | "listings"
   | "balance"
   | "create"
@@ -69,11 +70,6 @@ type AdminGroup = Club & {
   completedOrders: number;
 };
 
-type GlobalSettings = {
-  botCommissionPercent: number;
-  debtLimitKopecks: number;
-};
-
 type Buyer = {
   telegramId: number;
   username?: string;
@@ -98,14 +94,46 @@ type Product = {
   sellerPriceKopecks: number;
   buyerPriceKopecks: number;
   images: string[];
+  storeId: number;
   storeName: string;
   sellerTelegramId: number;
+  active: boolean;
+  orderCount: number;
   rating: number;
   reviewCount: number;
   groupBuyId?: number;
   targetCount?: number;
   reservedCount: number;
   groupBuyStatus?: string;
+};
+
+type Storefront = {
+  id: number;
+  name: string;
+  sellerTelegramId: number;
+  productCount: number;
+  cover?: string;
+  rating: number;
+};
+
+type Order = {
+  id: number;
+  status: "AWAITING_PAYMENT" | "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED";
+  productId: number;
+  productTitle: string;
+  image?: string;
+  storeName: string;
+  sellerPriceKopecks: number;
+  buyerPriceKopecks: number;
+  commissionKopecks: number;
+  createdAt: string;
+  sellerName?: string;
+  sellerUsername?: string;
+  paymentPhone?: string;
+  paymentCard?: string;
+  buyerName?: string;
+  buyerUsername?: string;
+  buyerPhone?: string;
 };
 
 type TelegramWebApp = {
@@ -138,6 +166,7 @@ const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
   { id: "market", label: "Маркет", icon: House },
   { id: "group", label: "Групповые закупки", icon: UsersRound },
   { id: "orders", label: "Мои покупки", icon: ShoppingBag },
+  { id: "sales", label: "Заказы клиентов", icon: UsersRound },
   { id: "listings", label: "Мои объявления", icon: Store },
   { id: "create", label: "Создать объявление", icon: PackagePlus },
   { id: "balance", label: "Баланс и комиссии", icon: WalletCards },
@@ -219,8 +248,11 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     sellerPriceKopecks: asNumber(row.seller_price_kopecks),
     buyerPriceKopecks: asNumber(row.buyer_price_kopecks),
     images,
+    storeId: asNumber(row.store_id),
     storeName: String(row.store_name || ""),
     sellerTelegramId: asNumber(row.seller_telegram_id),
+    active: row.active === undefined ? true : asBoolean(row.active),
+    orderCount: asNumber(row.order_count),
     rating: asNumber(row.rating),
     reviewCount: asNumber(row.review_count),
     groupBuyId: row.group_buy_id ? asNumber(row.group_buy_id) : undefined,
@@ -229,6 +261,36 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     groupBuyStatus: row.group_buy_status
       ? String(row.group_buy_status)
       : undefined,
+  };
+};
+
+const camelOrder = (row: Record<string, unknown>): Order => {
+  let images: string[] = [];
+  try {
+    images = JSON.parse(String(row.image_urls || "[]"));
+  } catch {
+    images = [];
+  }
+  return {
+    id: asNumber(row.id),
+    status: String(row.status || "AWAITING_PAYMENT") as Order["status"],
+    productId: asNumber(row.product_id),
+    productTitle: String(row.product_title || ""),
+    image: images[0],
+    storeName: String(row.store_name || ""),
+    sellerPriceKopecks: asNumber(row.seller_price_kopecks),
+    buyerPriceKopecks: asNumber(row.buyer_price_kopecks),
+    commissionKopecks: asNumber(row.commission_kopecks),
+    createdAt: String(row.created_at || ""),
+    sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerUsername: row.seller_username
+      ? String(row.seller_username)
+      : undefined,
+    paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
+    paymentCard: row.payment_card ? String(row.payment_card) : undefined,
+    buyerName: row.buyer_name ? String(row.buyer_name) : undefined,
+    buyerUsername: row.buyer_username ? String(row.buyer_username) : undefined,
+    buyerPhone: row.buyer_phone ? String(row.buyer_phone) : undefined,
   };
 };
 
@@ -259,6 +321,7 @@ export function RedlineApp() {
   const [screen, setScreen] = useState<Screen>("market");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [activeCategory, setActiveCategory] = useState("Все");
+  const [activeStoreId, setActiveStoreId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState("");
   const [favorites, setFavorites] = useState<number[]>([]);
@@ -405,12 +468,35 @@ export function RedlineApp() {
         (product) =>
           (activeCategory === "Все" ||
             product.category === activeCategory) &&
+          (activeStoreId === null || product.storeId === activeStoreId) &&
           `${product.title} ${product.storeName}`
             .toLowerCase()
             .includes(query.toLowerCase()),
       ),
-    [activeCategory, products, query],
+    [activeCategory, activeStoreId, products, query],
   );
+
+  const storefronts = useMemo(() => {
+    const byId = new Map<number, Storefront>();
+    for (const product of products) {
+      const current = byId.get(product.storeId);
+      if (current) {
+        current.productCount += 1;
+        if (!current.cover && product.images[0]) current.cover = product.images[0];
+        current.rating = Math.max(current.rating, product.rating);
+      } else {
+        byId.set(product.storeId, {
+          id: product.storeId,
+          name: product.storeName,
+          sellerTelegramId: product.sellerTelegramId,
+          productCount: 1,
+          cover: product.images[0],
+          rating: product.rating,
+        });
+      }
+    }
+    return Array.from(byId.values());
+  }, [products]);
 
   const groupProducts = products.filter((product) => product.kind === "group");
   const isClubOwner =
@@ -534,6 +620,7 @@ export function RedlineApp() {
           setProfile((current) =>
             current ? { ...current, selectedGroupId: club.id } : current,
           );
+          setActiveStoreId(null);
           setSelectedClub(club);
         }}
       />
@@ -576,6 +663,8 @@ export function RedlineApp() {
                       ? { ...current, selectedGroupId: nextClub.id }
                       : current,
                   );
+                  setActiveStoreId(null);
+                  setActiveCategory("Все");
                   setSelectedClub(nextClub);
                 } catch (selectionError) {
                   setToast(
@@ -617,7 +706,7 @@ export function RedlineApp() {
         <nav className="drawer-nav">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const needsClub = ["group", "listings", "create", "admin"].includes(item.id);
+            const needsClub = ["group", "orders", "sales", "listings", "create", "admin"].includes(item.id);
             const disabled = needsClub && !selectedClub;
             return (
               <button
@@ -645,6 +734,9 @@ export function RedlineApp() {
             clubs={clubs}
             categories={categories}
             products={visibleProducts}
+            storefronts={storefronts}
+            activeStoreId={activeStoreId}
+            setActiveStoreId={setActiveStoreId}
             totalProducts={products.length}
             groupCount={groupProducts.length}
             activeCategory={activeCategory}
@@ -677,14 +769,32 @@ export function RedlineApp() {
         )}
 
         {screen === "orders" && (
-          <EmptySection title="Мои покупки" text="Заказов пока нет. После покупки они появятся здесь." />
+          <OrdersPage
+            mode="purchases"
+            club={selectedClub}
+            request={request}
+            onToast={setToast}
+          />
+        )}
+
+        {screen === "sales" && (
+          <OrdersPage
+            mode="sales"
+            club={selectedClub}
+            request={request}
+            onToast={setToast}
+          />
         )}
 
         {screen === "listings" && (
-          <EmptySection
-            title="Мои объявления"
-            text="Созданные вами объявления будут отображаться здесь."
-            action={<button className="main-action" onClick={() => navigate("create")}>Создать объявление</button>}
+          <SellerListings
+            club={selectedClub}
+            request={request}
+            onCreate={() => navigate("create")}
+            onChanged={async () => {
+              if (selectedClub) await loadCatalog(selectedClub.telegramGroupId);
+            }}
+            onToast={setToast}
           />
         )}
 
@@ -901,6 +1011,9 @@ function Market({
   clubs,
   categories,
   products,
+  storefronts,
+  activeStoreId,
+  setActiveStoreId,
   totalProducts,
   groupCount,
   activeCategory,
@@ -917,6 +1030,9 @@ function Market({
   clubs: Club[];
   categories: Category[];
   products: Product[];
+  storefronts: Storefront[];
+  activeStoreId: number | null;
+  setActiveStoreId: (value: number | null) => void;
   totalProducts: number;
   groupCount: number;
   activeCategory: string;
@@ -957,6 +1073,52 @@ function Market({
           <ConnectClubState hasGroups={clubs.length > 0} />
         ) : (
           <>
+            <div className="storefront-heading">
+              <div><span className="section-kicker">МАГАЗИНЫ</span><h3>Выберите магазин</h3></div>
+              <span>{storefronts.length}</span>
+            </div>
+            <div className="storefront-row">
+              <button
+                className={`storefront-card all-stores ${activeStoreId === null ? "active" : ""}`}
+                onClick={() => {
+                  setActiveStoreId(null);
+                  setActiveCategory("Все");
+                  setQuery("");
+                }}
+              >
+                <span className="storefront-monogram">ALL</span>
+                <b>Все магазины</b>
+                <small>{totalProducts} товаров</small>
+              </button>
+              {storefronts.map((store) => (
+                <button
+                  key={store.id}
+                  className={`storefront-card ${activeStoreId === store.id ? "active" : ""}`}
+                  onClick={() => {
+                    setActiveStoreId(store.id);
+                    setActiveCategory("Все");
+                    setQuery("");
+                  }}
+                >
+                  <span
+                    className="storefront-cover"
+                    style={store.cover ? { backgroundImage: `linear-gradient(180deg, transparent, rgba(0,0,0,.75)), url("${store.cover}")` } : undefined}
+                  >
+                    {!store.cover && store.name.slice(0, 2).toUpperCase()}
+                  </span>
+                  <b>{store.name}</b>
+                  <small>{store.productCount} товаров{store.rating > 0 ? ` · ★ ${store.rating.toFixed(1)}` : ""}</small>
+                </button>
+              ))}
+            </div>
+            <div className="store-products-heading">
+              <span className="section-kicker">ТОВАРЫ</span>
+              <h3>
+                {activeStoreId === null
+                  ? "Все товары"
+                  : storefronts.find((store) => store.id === activeStoreId)?.name || "Товары магазина"}
+              </h3>
+            </div>
             <div className="search-box">
               <Search size={18} />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по товарам и магазинам" />
@@ -1130,6 +1292,364 @@ function SimpleList({
         <div className="empty-state"><UsersRound size={32} /><h3>Активных закупок нет</h3><p>Никакие демонстрационные товары не загружены.</p></div>
       )}
     </section>
+  );
+}
+
+function SellerListings({
+  club,
+  request,
+  onCreate,
+  onChanged,
+  onToast,
+}: {
+  club: Club | null;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onCreate: () => void;
+  onChanged: () => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const [items, setItems] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function loadListings() {
+    if (!club) return;
+    setLoading(true);
+    try {
+      const rows = await request<Record<string, unknown>[]>(
+        `/groups/${club.telegramGroupId}/my-products`,
+      );
+      setItems(rows.map(camelProduct));
+    } catch (listingsError) {
+      onToast(
+        listingsError instanceof Error
+          ? listingsError.message
+          : "Не удалось загрузить объявления",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!club) return;
+    let cancelled = false;
+    void request<Record<string, unknown>[]>(
+      `/groups/${club.telegramGroupId}/my-products`,
+    )
+      .then((rows) => {
+        if (!cancelled) setItems(rows.map(camelProduct));
+      })
+      .catch((listingsError) => {
+        if (!cancelled) {
+          onToast(
+            listingsError instanceof Error
+              ? listingsError.message
+              : "Не удалось загрузить объявления",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Seller listings reload when the selected Telegram group changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [club?.telegramGroupId]);
+
+  if (!club) {
+    return <EmptySection title="Мои объявления" text="Сначала выберите клуб." />;
+  }
+
+  const activeCount = items.filter((item) => item.active).length;
+  const totalOrders = items.reduce((sum, item) => sum + item.orderCount, 0);
+
+  return (
+    <section className="inner-page narrow-page">
+      <div className="page-title"><span className="section-kicker">SELLER SPACE</span><h1>Мои объявления</h1><p>{club.title}</p></div>
+      <div className="seller-summary">
+        <div><span>Всего</span><b>{items.length}</b></div>
+        <div><span>Активных</span><b>{activeCount}</b></div>
+        <div><span>Заказов</span><b>{totalOrders}</b></div>
+      </div>
+      <button className="main-action listings-create" onClick={onCreate}>Создать объявление</button>
+      {loading ? (
+        <div className="empty-inline">Загружаем объявления…</div>
+      ) : items.length ? (
+        <div className="seller-listings">
+          {items.map((product) => (
+            <article className="listing-card" key={product.id}>
+              <div
+                className="listing-thumb actual-product-image"
+                style={product.images[0] ? { backgroundImage: `url("${product.images[0]}")` } : undefined}
+              />
+              <div>
+                <span className={product.active ? "status-on" : "status-off"}>
+                  {product.active ? "АКТИВНО" : "СКРЫТО"}
+                </span>
+                <b>{product.title}</b>
+                <small>{product.storeName} · {product.category}</small>
+                <p>{formatPrice(product.buyerPriceKopecks)} · Остаток: {product.stock} · Заказов: {product.orderCount}</p>
+              </div>
+              <div className="seller-listing-actions">
+                <button
+                  onClick={async () => {
+                    try {
+                      await request(`/products/${product.id}/active`, {
+                        method: "PUT",
+                        body: JSON.stringify({ active: !product.active }),
+                      });
+                      await Promise.all([loadListings(), onChanged()]);
+                      onToast(product.active ? "Объявление скрыто" : "Объявление снова активно");
+                    } catch (toggleError) {
+                      onToast(toggleError instanceof Error ? toggleError.message : "Не удалось изменить объявление");
+                    }
+                  }}
+                >
+                  {product.active ? "Скрыть" : "Включить"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state"><Store size={30} /><h3>Объявлений пока нет</h3><p>После публикации товар появится здесь автоматически.</p></div>
+      )}
+    </section>
+  );
+}
+
+function OrdersPage({
+  mode,
+  club,
+  request,
+  onToast,
+}: {
+  mode: "purchases" | "sales";
+  club: Club | null;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onToast: (message: string) => void;
+}) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openRequisites, setOpenRequisites] = useState<number[]>([]);
+
+  async function loadOrders() {
+    if (!club) return;
+    setLoading(true);
+    try {
+      const rows = await request<Record<string, unknown>[]>(
+        `/groups/${club.telegramGroupId}/orders/${mode}`,
+      );
+      setOrders(rows.map(camelOrder));
+    } catch (ordersError) {
+      onToast(
+        ordersError instanceof Error
+          ? ordersError.message
+          : "Не удалось загрузить заказы",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!club) return;
+    let cancelled = false;
+    void request<Record<string, unknown>[]>(
+      `/groups/${club.telegramGroupId}/orders/${mode}`,
+    )
+      .then((rows) => {
+        if (!cancelled) setOrders(rows.map(camelOrder));
+      })
+      .catch((ordersError) => {
+        if (!cancelled) {
+          onToast(
+            ordersError instanceof Error
+              ? ordersError.message
+              : "Не удалось загрузить заказы",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Orders reload when role or selected Telegram group changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [club?.telegramGroupId, mode]);
+
+  if (!club) {
+    return <EmptySection title={mode === "sales" ? "Заказы клиентов" : "Мои покупки"} text="Сначала выберите клуб." />;
+  }
+
+  async function advance(order: Order, status: "PAID" | "SHIPPED" | "COMPLETED") {
+    try {
+      await request(`/orders/${order.id}/status/${status.toLowerCase()}`, {
+        method: "POST",
+      });
+      await loadOrders();
+      onToast(
+        status === "PAID"
+          ? "Продавец получил уведомление об оплате"
+          : status === "SHIPPED"
+            ? "Покупатель уведомлён об отправке"
+            : "Получение подтверждено, заказ завершён",
+      );
+    } catch (advanceError) {
+      onToast(
+        advanceError instanceof Error
+          ? advanceError.message
+          : "Не удалось обновить заказ",
+      );
+    }
+  }
+
+  return (
+    <section className="inner-page narrow-page">
+      <div className="page-title">
+        <span className="section-kicker">{mode === "sales" ? "SELLER ORDERS" : "MY ORDERS"}</span>
+        <h1>{mode === "sales" ? "Заказы клиентов" : "Мои покупки"}</h1>
+        <p>{mode === "sales" ? "Контакты покупателей и выполнение заказов" : `Покупки в клубе ${club.title}`}</p>
+      </div>
+      {loading ? (
+        <div className="empty-inline">Загружаем заказы…</div>
+      ) : orders.length ? (
+        orders.map((order) => (
+          <OrderCard
+            key={order.id}
+            order={order}
+            mode={mode}
+            requisitesOpen={openRequisites.includes(order.id)}
+            onToggleRequisites={() =>
+              setOpenRequisites((current) =>
+                current.includes(order.id)
+                  ? current.filter((id) => id !== order.id)
+                  : [...current, order.id],
+              )
+            }
+            onAdvance={(status) => void advance(order, status)}
+            onToast={onToast}
+          />
+        ))
+      ) : (
+        <div className="empty-state"><ShoppingBag size={30} /><h3>Заказов пока нет</h3><p>{mode === "sales" ? "Новые заказы ваших товаров появятся здесь." : "После покупки заказ появится здесь."}</p></div>
+      )}
+    </section>
+  );
+}
+
+function OrderCard({
+  order,
+  mode,
+  requisitesOpen,
+  onToggleRequisites,
+  onAdvance,
+  onToast,
+}: {
+  order: Order;
+  mode: "purchases" | "sales";
+  requisitesOpen: boolean;
+  onToggleRequisites: () => void;
+  onAdvance: (status: "PAID" | "SHIPPED" | "COMPLETED") => void;
+  onToast: (message: string) => void;
+}) {
+  const steps = [
+    { status: "AWAITING_PAYMENT", label: "Ожидает оплаты", text: "Покупатель переводит деньги продавцу" },
+    { status: "PAID", label: "Оплачено", text: "Продавец проверяет поступление" },
+    { status: "SHIPPED", label: "Отправлено", text: "Покупатель ожидает товар" },
+    { status: "COMPLETED", label: "Завершено", text: "Получение подтверждено" },
+  ];
+  const currentIndex = steps.findIndex((step) => step.status === order.status);
+  const statusLabel = steps[currentIndex]?.label || order.status;
+  const action =
+    mode === "purchases" && order.status === "AWAITING_PAYMENT"
+      ? { label: "Я оплатил", status: "PAID" as const }
+      : mode === "sales" && order.status === "PAID"
+        ? { label: "Отправил товар / выполнил услугу", status: "SHIPPED" as const }
+        : mode === "purchases" && order.status === "SHIPPED"
+          ? { label: "Подтвердить получение", status: "COMPLETED" as const }
+          : null;
+
+  const copyValue = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      onToast("Скопировано");
+    } catch {
+      onToast("Не удалось скопировать");
+    }
+  };
+
+  return (
+    <article className={`order-card ${order.status === "AWAITING_PAYMENT" ? "featured-order" : ""}`}>
+      <div className="order-head">
+        <div><span className="order-number">ЗАКАЗ #{order.id}</span><strong>{statusLabel}</strong></div>
+        <span>{new Date(order.createdAt).toLocaleDateString("ru-RU")}</span>
+      </div>
+      <div className="order-product">
+        <div
+          className="order-thumb actual-product-image"
+          style={order.image ? { backgroundImage: `url("${order.image}")` } : undefined}
+        />
+        <div>
+          <b>{order.productTitle}</b>
+          <span>{order.storeName}</span>
+          <strong>{formatPrice(order.buyerPriceKopecks)}</strong>
+        </div>
+      </div>
+
+      {mode === "sales" && (
+        <div className="client-details">
+          <span>ПОКУПАТЕЛЬ</span>
+          <b>{order.buyerName || "Покупатель"}</b>
+          <p>{order.buyerPhone || "Телефон не указан"}{order.buyerUsername ? ` · @${order.buyerUsername}` : ""}</p>
+        </div>
+      )}
+
+      {mode === "purchases" && order.status !== "COMPLETED" && (
+        <>
+          <button className="outline-action" onClick={onToggleRequisites}>
+            {requisitesOpen ? "Скрыть реквизиты" : "Показать реквизиты продавца"}
+          </button>
+          {requisitesOpen && (
+            <div className="payment-details">
+              <div className="client-details">
+                <span>ПРОДАВЕЦ</span>
+                <b>{order.sellerName || order.storeName}</b>
+                <p>{order.sellerUsername ? `@${order.sellerUsername}` : "Контакт через магазин"}</p>
+              </div>
+              {order.paymentPhone && (
+                <div className="requisites"><div><span>СБП / телефон</span><strong>{order.paymentPhone}</strong></div><button onClick={() => void copyValue(order.paymentPhone || "")}>Копировать</button></div>
+              )}
+              {order.paymentCard && (
+                <div className="requisites"><div><span>Карта / реквизиты</span><strong>{order.paymentCard}</strong></div><button onClick={() => void copyValue(order.paymentCard || "")}>Копировать</button></div>
+              )}
+              {!order.paymentPhone && !order.paymentCard && <div className="empty-inline">Продавец ещё не указал реквизиты.</div>}
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="status-timeline">
+        {steps.map((step, index) => (
+          <div key={step.status} className={index < currentIndex ? "done" : index === currentIndex ? "current" : ""}>
+            <i>{index < currentIndex ? "✓" : index + 1}</i>
+            <span><b>{step.label}</b><small>{step.text}</small></span>
+          </div>
+        ))}
+      </div>
+
+      {mode === "sales" && (
+        <div className="seller-order-finance">
+          <span>Вам: <b>{formatPrice(order.sellerPriceKopecks)}</b></span>
+          <span>Комиссия после завершения: <b>{formatPrice(order.commissionKopecks)}</b></span>
+        </div>
+      )}
+      {action && <button className="main-action" onClick={() => onAdvance(action.status)}>{action.label}</button>}
+    </article>
   );
 }
 
@@ -1649,10 +2169,8 @@ function SuperAdmin({
   const [saving, setSaving] = useState(false);
   const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
   const [debts, setDebts] = useState<Record<string, unknown>[]>([]);
-  const [settings, setSettings] = useState<GlobalSettings>({
-    botCommissionPercent: 0,
-    debtLimitKopecks: 0,
-  });
+  const [botCommissionInput, setBotCommissionInput] = useState("0");
+  const [debtLimitInput, setDebtLimitInput] = useState("0");
 
   useEffect(() => {
     void loadAdminData();
@@ -1668,10 +2186,10 @@ function SuperAdmin({
         request<Record<string, unknown>[]>("/admin/debts"),
       ]);
       setAdminGroups(groupRows.map(camelAdminGroup));
-      setSettings({
-        botCommissionPercent: asNumber(settingsRow.bot_commission_percent),
-        debtLimitKopecks: asNumber(settingsRow.default_debt_limit_kopecks),
-      });
+      setBotCommissionInput(String(asNumber(settingsRow.bot_commission_percent)));
+      setDebtLimitInput(
+        String(Math.round(asNumber(settingsRow.default_debt_limit_kopecks) / 100)),
+      );
       setDebts(debtRows);
     } catch (adminError) {
       onToast(
@@ -1748,7 +2266,10 @@ function SuperAdmin({
             try {
               await request("/admin/settings", {
                 method: "PUT",
-                body: JSON.stringify(settings),
+                body: JSON.stringify({
+                  botCommissionPercent: Number(botCommissionInput),
+                  debtLimitKopecks: Number(debtLimitInput) * 100,
+                }),
               });
               await loadAdminData();
               onToast("Глобальные настройки сохранены");
@@ -1760,8 +2281,8 @@ function SuperAdmin({
           }}
         >
           <div><h2>Комиссия платформы</h2><p className="settings-hint">Применяется ко всем продавцам и участвует в расчёте цены покупателя.</p></div>
-          <label><span>Комиссия бота, %</span><input type="number" min="0" max="30" step="0.1" value={settings.botCommissionPercent} onChange={(event) => setSettings((current) => ({ ...current, botCommissionPercent: Number(event.target.value) }))} required /></label>
-          <label><span>Лимит долга продавца, ₽</span><input type="number" min="1" value={Math.round(settings.debtLimitKopecks / 100)} onChange={(event) => setSettings((current) => ({ ...current, debtLimitKopecks: Number(event.target.value) * 100 }))} required /></label>
+          <label><span>Комиссия бота, %</span><input type="number" min="0" max="30" step="0.1" value={botCommissionInput} onChange={(event) => setBotCommissionInput(event.target.value)} required /></label>
+          <label><span>Лимит долга продавца, ₽</span><input type="number" min="1" value={debtLimitInput} onChange={(event) => setDebtLimitInput(event.target.value)} required /></label>
           <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
         </form>
       )}

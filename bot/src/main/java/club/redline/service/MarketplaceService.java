@@ -66,8 +66,8 @@ public class MarketplaceService {
                        CAST(ROUND(p.seller_price_kopecks *
                          (1 + s.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
-                       p.image_urls, st.name AS store_name,
-                       st.seller_telegram_id,
+                       p.image_urls, st.id AS store_id, st.name AS store_name,
+                       st.seller_telegram_id, p.active,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(r.id) AS review_count,
                        gb.id AS group_buy_id, gb.target_count,
@@ -86,10 +86,59 @@ public class MarketplaceService {
                     SELECT 1 FROM group_seller_bans b
                     WHERE b.group_id = g.id AND b.seller_telegram_id = st.seller_telegram_id
                   )
-                GROUP BY p.id, s.bot_commission_percent, g.commission_percent, st.name,
+                GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
+                         st.id, st.name,
                          gb.target_count, gb.status, gb.payment_deadline
                 ORDER BY p.created_at DESC
                 """, telegramGroupId);
+    }
+
+    public List<Map<String, Object>> sellerProducts(long sellerTelegramId,
+                                                     long telegramGroupId) {
+        return jdbc.queryForList("""
+                SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
+                       p.seller_price_kopecks,
+                       CAST(ROUND(p.seller_price_kopecks *
+                         (1 + u.bot_commission_percent / 100 + g.commission_percent / 100)) AS INTEGER)
+                         AS buyer_price_kopecks,
+                       p.image_urls, p.active, st.id AS store_id, st.name AS store_name,
+                       st.seller_telegram_id,
+                       gb.id AS group_buy_id, gb.target_count,
+                       gb.status AS group_buy_status,
+                       COUNT(DISTINCT gbr.id) FILTER (WHERE gbr.status <> 'CANCELLED')
+                         AS reserved_count,
+                       COUNT(DISTINCT o.id) AS order_count
+                FROM products p
+                JOIN stores st ON st.id = p.store_id
+                JOIN users u ON u.telegram_id = st.seller_telegram_id
+                JOIN telegram_groups g ON g.id = p.group_id
+                LEFT JOIN group_buys gb ON gb.product_id = p.id
+                LEFT JOIN group_buy_reservations gbr ON gbr.group_buy_id = gb.id
+                LEFT JOIN orders o ON o.product_id = p.id
+                WHERE g.telegram_group_id = ? AND st.seller_telegram_id = ?
+                GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
+                         st.id, st.name, gb.id, gb.target_count, gb.status
+                ORDER BY p.created_at DESC
+                """, telegramGroupId, sellerTelegramId);
+    }
+
+    @Transactional
+    public void setSellerProductActive(long sellerTelegramId, long productId, boolean active) {
+        Map<String, Object> product = jdbc.queryForMap("""
+                SELECT p.group_id FROM products p
+                JOIN stores st ON st.id = p.store_id
+                WHERE p.id = ? AND st.seller_telegram_id = ?
+                """, productId, sellerTelegramId);
+        if (active) {
+            assertSellerCanTrade(
+                    sellerTelegramId,
+                    ((Number) product.get("group_id")).longValue()
+            );
+        }
+        jdbc.update("""
+                UPDATE products SET active = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, active, productId);
     }
 
     @Transactional
@@ -281,7 +330,7 @@ public class MarketplaceService {
                 WHERE group_buy_id = ? AND status = 'RESERVED'
                 """, groupBuyId);
         List<Long> buyers = participantIds(groupBuyId);
-        buyers.forEach(id -> telegram.sendMessage(id, """
+        buyers.forEach(id -> notifyUser(id, """
                 <b>Закупка собрана!</b>
                 Актуальная цена: <b>%d ₽</b>.
                 Оплатите продавцу до %s и нажмите «Я оплатил» в разделе покупок.
@@ -315,7 +364,7 @@ public class MarketplaceService {
                   formed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'AWAITING_PAYMENT'
                 """, groupBuyId);
-        participantIds(groupBuyId).forEach(id -> telegram.sendMessage(id,
+        participantIds(groupBuyId).forEach(id -> notifyUser(id,
                 "<b>Закупка сформирована.</b>\nОплата подтверждена. Ожидайте информацию о поставке."));
     }
 
@@ -328,7 +377,7 @@ public class MarketplaceService {
                   delivery_to = ?, delivery_note = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status IN ('FORMED', 'IN_DELIVERY')
                 """, from.toString(), to.toString(), note, groupBuyId);
-        participantIds(groupBuyId).forEach(id -> telegram.sendMessage(id, """
+        participantIds(groupBuyId).forEach(id -> notifyUser(id, """
                 <b>Новый ориентир поставки</b>
                 %s — %s
                 %s
@@ -339,7 +388,7 @@ public class MarketplaceService {
     public long createOrder(long buyerTelegramId, long productId) {
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.id, p.stock, p.seller_price_kopecks, p.group_id,
-                       st.seller_telegram_id, u.bot_commission_percent,
+                       p.active, st.seller_telegram_id, u.bot_commission_percent,
                        g.commission_percent
                 FROM products p
                 JOIN stores st ON st.id = p.store_id
@@ -349,6 +398,12 @@ public class MarketplaceService {
                 """, productId);
         long sellerId = ((Number) product.get("seller_telegram_id")).longValue();
         long groupId = ((Number) product.get("group_id")).longValue();
+        if (!asBoolean(product.get("active"))) {
+            throw new IllegalStateException("Product is not available");
+        }
+        if (sellerId == buyerTelegramId) {
+            throw new IllegalStateException("You cannot buy your own product");
+        }
         assertSellerCanTrade(sellerId, groupId);
         int stock = ((Number) product.get("stock")).intValue();
         if (stock < 1) throw new IllegalStateException("Product is out of stock");
@@ -365,8 +420,53 @@ public class MarketplaceService {
                 """, Long.class, productId, buyerTelegramId, sellerId, groupId,
                 sellerPrice, buyerPrice, commission);
         jdbc.update("UPDATE products SET stock = stock - 1 WHERE id = ?", productId);
-        telegram.sendMessage(sellerId, "<b>Новый заказ.</b>\nПокупатель ожидает реквизиты.");
+        notifyUser(sellerId, "<b>Новый заказ.</b>\nПокупатель ожидает реквизиты.");
         return orderId;
+    }
+
+    public List<Map<String, Object>> purchaseOrders(long buyerTelegramId,
+                                                     long telegramGroupId) {
+        return jdbc.queryForList("""
+                SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
+                       o.commission_kopecks, o.created_at, o.updated_at,
+                       p.id AS product_id, p.title AS product_title, p.image_urls,
+                       st.id AS store_id, st.name AS store_name,
+                       st.payment_phone, st.payment_card,
+                       seller.telegram_id AS seller_telegram_id,
+                       seller.username AS seller_username,
+                       COALESCE(NULLIF(seller.display_name, ''),
+                         TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
+                         AS seller_name
+                FROM orders o
+                JOIN products p ON p.id = o.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users seller ON seller.telegram_id = o.seller_telegram_id
+                JOIN telegram_groups g ON g.id = o.group_id
+                WHERE o.buyer_telegram_id = ? AND g.telegram_group_id = ?
+                ORDER BY o.created_at DESC
+                """, buyerTelegramId, telegramGroupId);
+    }
+
+    public List<Map<String, Object>> salesOrders(long sellerTelegramId,
+                                                  long telegramGroupId) {
+        return jdbc.queryForList("""
+                SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
+                       o.commission_kopecks, o.created_at, o.updated_at,
+                       p.id AS product_id, p.title AS product_title, p.image_urls,
+                       st.id AS store_id, st.name AS store_name,
+                       buyer.telegram_id AS buyer_telegram_id,
+                       buyer.username AS buyer_username, buyer.phone AS buyer_phone,
+                       COALESCE(NULLIF(buyer.display_name, ''),
+                         TRIM(buyer.first_name || ' ' || COALESCE(buyer.last_name, '')))
+                         AS buyer_name
+                FROM orders o
+                JOIN products p ON p.id = o.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users buyer ON buyer.telegram_id = o.buyer_telegram_id
+                JOIN telegram_groups g ON g.id = o.group_id
+                WHERE o.seller_telegram_id = ? AND g.telegram_group_id = ?
+                ORDER BY o.created_at DESC
+                """, sellerTelegramId, telegramGroupId);
     }
 
     @Transactional
@@ -387,13 +487,27 @@ public class MarketplaceService {
         if (!valid) throw new IllegalStateException("Invalid order status transition");
         jdbc.update("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 targetStatus, orderId);
+        if ("PAID".equals(targetStatus)) {
+            notifyUser(seller,
+                    "<b>Покупатель отметил оплату.</b>\nПроверьте поступление и отправьте товар.");
+        } else if ("SHIPPED".equals(targetStatus)) {
+            notifyUser(buyer,
+                    "<b>Продавец отметил товар отправленным.</b>\nПосле получения подтвердите заказ.");
+        }
         if ("COMPLETED".equals(targetStatus)) {
             long commission = ((Number) order.get("commission_kopecks")).longValue();
             jdbc.update("""
                     UPDATE users SET commission_debt_kopecks = commission_debt_kopecks + ?
                     WHERE telegram_id = ?
                     """, commission, seller);
+            jdbc.update("""
+                    INSERT INTO commission_ledger
+                      (seller_telegram_id, order_id, amount_kopecks, entry_type)
+                    VALUES (?, ?, ?, 'ACCRUAL')
+                    """, seller, orderId, commission);
             refreshSellerBlock(seller);
+            notifyUser(seller,
+                    "<b>Заказ завершён.</b>\nКомиссия начислена в счётчик задолженности.");
         }
     }
 
@@ -613,7 +727,7 @@ public class MarketplaceService {
                 JOIN products p ON p.id = gb.product_id
                 JOIN stores s ON s.id = p.store_id WHERE gb.id = ?
                 """, Long.class, groupBuyId);
-        if (sellerId != null) telegram.sendMessage(sellerId, "<b>Групповая закупка</b>\n" + text);
+        if (sellerId != null) notifyUser(sellerId, "<b>Групповая закупка</b>\n" + text);
     }
 
     private void refreshSellerBlock(long sellerId) {
@@ -626,10 +740,19 @@ public class MarketplaceService {
         boolean shouldBlock = MarketplaceRules.debtBlocksSeller(debt, limit);
         jdbc.update("UPDATE users SET seller_blocked = ? WHERE telegram_id = ?", shouldBlock, sellerId);
         if (shouldBlock && !asBoolean(state.get("seller_blocked"))) {
-            telegram.sendMessage(sellerId, """
+            notifyUser(sellerId, """
                     <b>Лимит задолженности превышен.</b>
                     Публикация объявлений и приём заказов приостановлены до оплаты комиссии.
                     """);
+        }
+    }
+
+    private void notifyUser(long telegramId, String text) {
+        try {
+            telegram.sendMessage(telegramId, text);
+        } catch (RuntimeException notificationError) {
+            log.warn("Telegram notification to {} failed: {}",
+                    telegramId, notificationError.getMessage());
         }
     }
 
