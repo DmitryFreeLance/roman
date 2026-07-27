@@ -208,18 +208,29 @@ export function RedlineApp() {
   const [favorites, setFavorites] = useState<number[]>([]);
 
   useEffect(() => {
-    const telegram = window.Telegram?.WebApp;
-    telegram?.ready();
-    telegram?.expand();
-    const data = telegram?.initData || "";
-    void Promise.resolve().then(async () => {
+    let cancelled = false;
+    const connectTelegram = async () => {
+      await Promise.resolve();
+      let telegram = window.Telegram?.WebApp;
+      for (let attempt = 0; !telegram?.initData && attempt < 20; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        telegram = window.Telegram?.WebApp;
+      }
+      if (cancelled) return;
+      telegram?.ready();
+      telegram?.expand();
+      const data = telegram?.initData || "";
       setInitData(data);
       if (!data) {
         setLoading(false);
         return;
       }
       await loadBootstrap(data);
-    });
+    };
+    void connectTelegram();
+    return () => {
+      cancelled = true;
+    };
     // The Telegram payload is captured exactly once when the Mini App opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

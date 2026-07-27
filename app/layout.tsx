@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Oswald } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -47,6 +48,12 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ru">
+      <head>
+        <Script
+          src="https://telegram.org/js/telegram-web-app.js?63"
+          strategy="beforeInteractive"
+        />
+      </head>
       <body className={`${manrope.variable} ${oswald.variable}`}>
         {children}
       </body>
