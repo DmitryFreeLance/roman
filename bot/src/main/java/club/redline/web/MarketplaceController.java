@@ -4,6 +4,7 @@ import club.redline.config.RedlineProperties;
 import club.redline.security.TelegramInitDataVerifier;
 import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import club.redline.service.MarketplaceService;
+import club.redline.service.ImageStorageService;
 import club.redline.service.MarketplaceService.NewProduct;
 import club.redline.service.MarketplaceService.NewStore;
 import club.redline.service.MarketplaceService.ReservationResult;
@@ -14,6 +15,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.util.List;
@@ -25,12 +27,57 @@ public class MarketplaceController {
     private final MarketplaceService marketplace;
     private final TelegramInitDataVerifier verifier;
     private final RedlineProperties properties;
+    private final ImageStorageService images;
 
     public MarketplaceController(MarketplaceService marketplace, TelegramInitDataVerifier verifier,
-                                 RedlineProperties properties) {
+                                 RedlineProperties properties, ImageStorageService images) {
         this.marketplace = marketplace;
         this.verifier = verifier;
         this.properties = properties;
+        this.images = images;
+    }
+
+    @GetMapping("/me")
+    public Map<String, Object> me(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        TelegramUser user = authenticated(initData);
+        Map<String, Object> profile = new java.util.LinkedHashMap<>(
+                marketplace.profile(user.id())
+        );
+        profile.put("super_admin",
+                user.id() == properties.marketplace().superAdminTelegramId());
+        return profile;
+    }
+
+    @PostMapping("/register")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void register(@RequestHeader("X-Telegram-Init-Data") String initData,
+                         @Valid @RequestBody RegistrationRequest request) {
+        TelegramUser user = authenticated(initData);
+        marketplace.registerProfile(user.id(), request.displayName(), request.phone());
+    }
+
+    @GetMapping("/groups")
+    public List<Map<String, Object>> availableGroups(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        authenticated(initData);
+        return marketplace.availableGroups();
+    }
+
+    @GetMapping("/categories")
+    public List<Map<String, Object>> categories() {
+        return marketplace.categories();
+    }
+
+    @PostMapping(value = "/uploads", consumes = "multipart/form-data")
+    public Map<String, String> upload(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @RequestPart("file") MultipartFile file) {
+        TelegramUser user = authenticated(initData);
+        if (!asBoolean(marketplace.profile(user.id()).get("registered"))) {
+            throw new IllegalArgumentException("Registration is required");
+        }
+        return Map.of("url", images.store(file));
     }
 
     @GetMapping("/groups/{groupId}/catalog")
@@ -42,7 +89,7 @@ public class MarketplaceController {
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createProduct(@RequestHeader("X-Telegram-Init-Data") String initData,
                                            @Valid @RequestBody CreateProductRequest request) {
-        TelegramUser user = authenticated(initData);
+        TelegramUser user = registered(initData);
         long id = marketplace.createProduct(user.id(), new NewProduct(
                 request.groupId(), request.title(), request.description(), request.category(),
                 request.stock(), request.sellerPriceKopecks(), request.kind(),
@@ -55,7 +102,7 @@ public class MarketplaceController {
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createStore(@RequestHeader("X-Telegram-Init-Data") String initData,
                                          @Valid @RequestBody CreateStoreRequest request) {
-        TelegramUser user = authenticated(initData);
+        TelegramUser user = registered(initData);
         long id = marketplace.createStore(user.id(), new NewStore(
                 request.groupId(), request.name(), request.description(),
                 request.paymentPhone(), request.paymentCard()
@@ -67,7 +114,7 @@ public class MarketplaceController {
     public ReservationResult reserve(@RequestHeader("X-Telegram-Init-Data") String initData,
                                      @PathVariable long id,
                                      @RequestBody ReserveRequest request) {
-        TelegramUser user = authenticated(initData);
+        TelegramUser user = registered(initData);
         return marketplace.reserve(id, user.id(), request.phone());
     }
 
@@ -76,7 +123,7 @@ public class MarketplaceController {
     public void openPayment(@RequestHeader("X-Telegram-Init-Data") String initData,
                             @PathVariable long id,
                             @Valid @RequestBody OpenPaymentRequest request) {
-        TelegramUser user = authenticated(initData);
+        TelegramUser user = registered(initData);
         marketplace.openPayment(id, user.id(), request.finalPriceKopecks(), request.deadlineHours());
     }
 
@@ -84,14 +131,14 @@ public class MarketplaceController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markPaid(@RequestHeader("X-Telegram-Init-Data") String initData,
                          @PathVariable long id) {
-        marketplace.markGroupBuyPaid(id, authenticated(initData).id());
+        marketplace.markGroupBuyPaid(id, registered(initData).id());
     }
 
     @PostMapping("/group-buys/{id}/confirm")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void confirm(@RequestHeader("X-Telegram-Init-Data") String initData,
                         @PathVariable long id) {
-        marketplace.confirmGroupBuy(id, authenticated(initData).id());
+        marketplace.confirmGroupBuy(id, registered(initData).id());
     }
 
     @PutMapping("/group-buys/{id}/delivery")
@@ -99,28 +146,28 @@ public class MarketplaceController {
     public void updateDelivery(@RequestHeader("X-Telegram-Init-Data") String initData,
                                @PathVariable long id,
                                @Valid @RequestBody DeliveryRequest request) {
-        marketplace.updateDelivery(id, authenticated(initData).id(),
+        marketplace.updateDelivery(id, registered(initData).id(),
                 request.from(), request.to(), request.note());
     }
 
     @GetMapping("/group-buys/{id}/buyers")
     public List<Map<String, Object>> buyers(@RequestHeader("X-Telegram-Init-Data") String initData,
                                             @PathVariable long id) {
-        return marketplace.groupBuyBuyers(id, authenticated(initData).id());
+        return marketplace.groupBuyBuyers(id, registered(initData).id());
     }
 
     @PostMapping("/products/{productId}/orders")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
                                          @PathVariable long productId) {
-        return Map.of("id", marketplace.createOrder(authenticated(initData).id(), productId));
+        return Map.of("id", marketplace.createOrder(registered(initData).id(), productId));
     }
 
     @PostMapping("/orders/{id}/status/{status}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void advanceOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
                              @PathVariable long id, @PathVariable String status) {
-        marketplace.advanceOrder(id, authenticated(initData).id(), status.toUpperCase());
+        marketplace.advanceOrder(id, registered(initData).id(), status.toUpperCase());
     }
 
     @PutMapping("/groups/{telegramGroupId}/commission")
@@ -129,7 +176,7 @@ public class MarketplaceController {
                                       @PathVariable long telegramGroupId,
                                       @Valid @RequestBody GroupCommissionRequest request) {
         marketplace.updateGroupCommission(
-                telegramGroupId, authenticated(initData).id(), request.commissionPercent()
+                telegramGroupId, registered(initData).id(), request.commissionPercent()
         );
     }
 
@@ -166,6 +213,24 @@ public class MarketplaceController {
         );
     }
 
+    @PostMapping("/admin/categories")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Long> createCategory(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @Valid @RequestBody CategoryRequest request) {
+        requireSuperAdmin(initData);
+        return Map.of("id", marketplace.createCategory(request.name()));
+    }
+
+    @DeleteMapping("/admin/categories/{categoryId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteCategory(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long categoryId) {
+        requireSuperAdmin(initData);
+        marketplace.deleteCategory(categoryId);
+    }
+
     private TelegramUser authenticated(String initData) {
         TelegramUser user = verifier.verify(initData);
         marketplace.upsertUser(user);
@@ -173,13 +238,30 @@ public class MarketplaceController {
     }
 
     private TelegramUser requireSuperAdmin(String initData) {
-        TelegramUser user = authenticated(initData);
+        TelegramUser user = registered(initData);
         if (user.id() != properties.marketplace().superAdminTelegramId()) {
             throw new IllegalArgumentException("Super-admin access required");
         }
         return user;
     }
 
+    private TelegramUser registered(String initData) {
+        TelegramUser user = authenticated(initData);
+        if (!asBoolean(marketplace.profile(user.id()).get("registered"))) {
+            throw new IllegalArgumentException("Registration is required");
+        }
+        return user;
+    }
+
+    private static boolean asBoolean(Object value) {
+        if (value instanceof Boolean booleanValue) return booleanValue;
+        if (value instanceof Number numberValue) return numberValue.intValue() != 0;
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    public record RegistrationRequest(@NotBlank String displayName,
+                                      @NotBlank String phone) {}
+    public record CategoryRequest(@NotBlank String name) {}
     public record CreateProductRequest(
             long groupId,
             @NotBlank String title,

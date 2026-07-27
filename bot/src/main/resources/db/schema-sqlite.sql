@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT,
   first_name TEXT NOT NULL,
   last_name TEXT,
+  display_name TEXT,
+  phone TEXT,
+  registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),
   bot_commission_percent REAL NOT NULL DEFAULT 5.0,
   commission_debt_kopecks INTEGER NOT NULL DEFAULT 0,
   debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
@@ -24,6 +27,17 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS categories_active_sort_idx
+  ON categories(active, sort_order, name);
 
 CREATE TABLE IF NOT EXISTS telegram_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

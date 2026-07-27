@@ -39,9 +39,17 @@ class SqliteSchemaInitializerTest {
         Integer settings = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM platform_settings", Integer.class
         );
+        Integer businessRows = jdbc.queryForObject("""
+                SELECT
+                  (SELECT COUNT(*) FROM users) +
+                  (SELECT COUNT(*) FROM telegram_groups) +
+                  (SELECT COUNT(*) FROM categories) +
+                  (SELECT COUNT(*) FROM products)
+                """, Integer.class);
 
         assertThat(foreignKeys).isEqualTo(1);
         assertThat(tables).isEqualTo(8);
         assertThat(settings).isEqualTo(1);
+        assertThat(businessRows).isZero();
     }
 }

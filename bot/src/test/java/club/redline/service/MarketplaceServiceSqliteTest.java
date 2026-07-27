@@ -29,7 +29,11 @@ class MarketplaceServiceSqliteTest {
         jdbc = new JdbcTemplate(dataSource);
         RedlineProperties properties = new RedlineProperties(
                 new RedlineProperties.Telegram("", "https://example.test/redlineclub/", 50),
-                new RedlineProperties.Marketplace(1L, 5.0, 50_000L)
+                new RedlineProperties.Marketplace(1L, 5.0, 50_000L),
+                new RedlineProperties.Storage(
+                        "/tmp/redline-test-uploads",
+                        "https://example.test/redlineclub-api/"
+                )
         );
         TelegramApiClient telegram = new TelegramApiClient(RestClient.builder(), properties) {
             @Override
@@ -53,6 +57,10 @@ class MarketplaceServiceSqliteTest {
         marketplace.upsertUser(new TelegramUser(sellerId, "seller", "Seller", null));
         marketplace.upsertUser(new TelegramUser(firstBuyerId, "buyer1", "Buyer", "One"));
         marketplace.upsertUser(new TelegramUser(secondBuyerId, "buyer2", "Buyer", "Two"));
+        marketplace.registerProfile(sellerId, "Seller", "+70000000000");
+        marketplace.registerProfile(firstBuyerId, "Buyer One", "+70000000001");
+        marketplace.registerProfile(secondBuyerId, "Buyer Two", "+70000000002");
+        marketplace.createCategory("Brakes");
         marketplace.registerGroup(-100123L, "REDLINE Test", sellerId, 7);
 
         Long groupId = jdbc.queryForObject(

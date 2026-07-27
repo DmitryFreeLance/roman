@@ -5,7 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "redline")
 public record RedlineProperties(
         Telegram telegram,
-        Marketplace marketplace
+        Marketplace marketplace,
+        Storage storage
 ) {
     public record Telegram(
             String token,
@@ -17,5 +18,10 @@ public record RedlineProperties(
             long superAdminTelegramId,
             double botCommissionPercent,
             long defaultDebtLimitKopecks
+    ) {}
+
+    public record Storage(
+            String uploadDir,
+            String publicApiUrl
     ) {}
 }

@@ -88,7 +88,10 @@ public class TelegramApiClient {
                 "reply_markup", Map.of(
                         "inline_keyboard", List.of(List.of(Map.of(
                                 "text", "Подробнее",
-                                "web_app", Map.of("url", properties.telegram().miniAppUrl() + "?product=" + productId)
+                                "web_app", Map.of(
+                                        "url", properties.telegram().miniAppUrl() +
+                                                "?product=" + productId + "&group=" + groupId
+                                )
                         )))
                 )
         ));

@@ -37,6 +37,8 @@ docker run -d \
   -e BOT_COMMISSION_PERCENT='5.0' \
   -e DEBT_LIMIT_KOPECKS='50000' \
   -e DATABASE_URL='jdbc:sqlite:/data/redline.db' \
+  -e UPLOAD_DIR='/data/uploads' \
+  -e PUBLIC_API_URL='https://poznaysebya.site/redlineclub-api/' \
   redline-bot:1.0
 ```
 
@@ -58,10 +60,16 @@ docker logs --tail 150 redline-bot
 curl -s http://127.0.0.1:18080/actuator/health
 curl -I http://127.0.0.1:18080/redlineclub/
 docker exec redline-bot ls -lh /data/redline.db
+docker exec redline-bot ls -ld /data/uploads
 ```
 
 При старте приложение создаёт SQLite-таблицы, включает foreign keys и WAL,
 удаляет прежний webhook и запускает `getUpdates`.
+
+Новая база не содержит демонстрационных пользователей, групп, категорий или
+товаров. Пользователь регистрируется при первом входе. Группа появляется только
+после добавления бота администратором с правом управления темами. Категории
+создаёт супер-администратор в Mini App.
 
 Запускайте только один экземпляр контейнера с данным токеном: Telegram не
 разрешает параллельный long polling для одного бота.

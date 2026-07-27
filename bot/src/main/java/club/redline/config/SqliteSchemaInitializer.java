@@ -11,6 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -30,8 +32,11 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         populator.addScript(new ClassPathResource("db/schema-sqlite.sql"));
         DatabasePopulatorUtils.execute(populator, dataSource);
 
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        ensureUserProfileColumns(jdbc);
+
         RedlineProperties.Marketplace marketplace = properties.marketplace();
-        new JdbcTemplate(dataSource).update("""
+        jdbc.update("""
                 UPDATE platform_settings
                 SET bot_commission_percent = ?,
                     default_debt_limit_kopecks = ?,
@@ -39,5 +44,20 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
                 WHERE singleton = 1
                 """, marketplace.botCommissionPercent(),
                 marketplace.defaultDebtLimitKopecks());
+    }
+
+    private void ensureUserProfileColumns(JdbcTemplate jdbc) {
+        Set<String> columns = jdbc.queryForList("PRAGMA table_info(users)").stream()
+                .map(row -> String.valueOf(row.get("name")))
+                .collect(Collectors.toSet());
+        if (!columns.contains("display_name")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN display_name TEXT");
+        }
+        if (!columns.contains("phone")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN phone TEXT");
+        }
+        if (!columns.contains("registered")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN registered INTEGER NOT NULL DEFAULT 0");
+        }
     }
 }

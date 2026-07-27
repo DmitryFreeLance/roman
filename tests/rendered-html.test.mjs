@@ -29,9 +29,7 @@ test("server-renders the REDLINE Mini App shell", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>REDLINE CLUB/);
-  assert.match(html, /Каталог клуба/);
-  assert.match(html, /Групповые закупки/);
-  assert.match(html, /BMW Siberia/);
-  assert.match(html, /Открыть меню/);
+  assert.match(html, /Загрузка REDLINE/);
+  assert.doesNotMatch(html, /BMW Siberia|Роман|Forge District|Кованые диски/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Building your site/);
 });

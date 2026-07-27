@@ -66,7 +66,8 @@ public class MarketplaceService {
                        p.image_urls, st.name AS store_name,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(r.id) AS review_count,
-                       gb.target_count, gb.status AS group_buy_status, gb.payment_deadline,
+                       gb.id AS group_buy_id, gb.target_count,
+                       gb.status AS group_buy_status, gb.payment_deadline,
                        COUNT(gbr.id) FILTER (WHERE gbr.status <> 'CANCELLED') AS reserved_count
                 FROM products p
                 JOIN stores st ON st.id = p.store_id
@@ -90,6 +91,12 @@ public class MarketplaceService {
     @Transactional
     public long createProduct(long sellerTelegramId, NewProduct input) {
         assertSellerCanTrade(sellerTelegramId, input.groupId());
+        Integer categoryExists = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM categories WHERE name = ? AND active = 1
+                """, Integer.class, input.category());
+        if (categoryExists == null || categoryExists == 0) {
+            throw new IllegalArgumentException("Category is not available");
+        }
         Long storeId = jdbc.queryForObject("""
                 SELECT id FROM stores WHERE seller_telegram_id = ? AND group_id = ?
                 """, Long.class, sellerTelegramId, input.groupId());
@@ -129,6 +136,75 @@ public class MarketplaceService {
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
                 input.description(), input.paymentPhone(), input.paymentCard());
         return storeId;
+    }
+
+    public Map<String, Object> profile(long telegramId) {
+        return jdbc.queryForMap("""
+                SELECT telegram_id, username, first_name, last_name,
+                       display_name, phone, registered, seller_blocked,
+                       commission_debt_kopecks, debt_limit_kopecks
+                FROM users WHERE telegram_id = ?
+                """, telegramId);
+    }
+
+    @Transactional
+    public void registerProfile(long telegramId, String displayName, String phone) {
+        int updated = jdbc.update("""
+                UPDATE users
+                SET display_name = ?, phone = ?, registered = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ?
+                """, displayName.strip(), phone.strip(), telegramId);
+        if (updated == 0) throw new IllegalArgumentException("Telegram user is not initialized");
+    }
+
+    public List<Map<String, Object>> availableGroups() {
+        return jdbc.queryForList("""
+                SELECT g.id, g.telegram_group_id, g.title, g.owner_telegram_id,
+                       g.shop_thread_id, g.commission_percent,
+                       COUNT(DISTINCT p.id) AS product_count
+                FROM telegram_groups g
+                LEFT JOIN products p ON p.group_id = g.id AND p.active = 1
+                WHERE g.active = 1
+                GROUP BY g.id
+                ORDER BY g.created_at DESC
+                """);
+    }
+
+    public boolean groupExists(long telegramGroupId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM telegram_groups
+                WHERE telegram_group_id = ? AND active = 1
+                """, Integer.class, telegramGroupId);
+        return count != null && count > 0;
+    }
+
+    public List<Map<String, Object>> categories() {
+        return jdbc.queryForList("""
+                SELECT id, name, sort_order
+                FROM categories
+                WHERE active = 1
+                ORDER BY sort_order, name
+                """);
+    }
+
+    @Transactional
+    public long createCategory(String name) {
+        String normalized = name.strip();
+        if (normalized.isEmpty()) throw new IllegalArgumentException("Category name is required");
+        Long id = jdbc.queryForObject("""
+                INSERT INTO categories (name, active)
+                VALUES (?, 1)
+                ON CONFLICT (name) DO UPDATE SET active = 1
+                RETURNING id
+                """, Long.class, normalized);
+        if (id == null) throw new IllegalStateException("Category was not created");
+        return id;
+    }
+
+    @Transactional
+    public void deleteCategory(long categoryId) {
+        jdbc.update("UPDATE categories SET active = 0 WHERE id = ?", categoryId);
     }
 
     @Transactional
