@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  AlertTriangle,
   BadgeCheck,
   Bell,
   Check,
@@ -38,7 +39,6 @@ type Screen =
   | "create"
   | "admin"
   | "superadmin"
-  | "notifications"
   | "help";
 
 type Profile = {
@@ -51,6 +51,7 @@ type Profile = {
   selectedGroupId?: number;
   registered: boolean;
   sellerBlocked: boolean;
+  globallyBanned: boolean;
   botCommissionPercent: number;
   commissionDebtKopecks: number;
   debtLimitKopecks: number;
@@ -134,6 +135,25 @@ type AppNotification = {
   createdAt: string;
 };
 
+type GroupBuyPurchase = {
+  groupBuyId: number;
+  groupBuyStatus: string;
+  reservationStatus: string;
+  productTitle: string;
+  image?: string;
+  storeName: string;
+  sellerName?: string;
+  sellerUsername?: string;
+  paymentDetails?: string;
+  targetCount: number;
+  reservedCount: number;
+  finalPriceKopecks?: number;
+  paymentDeadline?: string;
+  deliveryFrom?: string;
+  deliveryTo?: string;
+  deliveryNote?: string;
+};
+
 type Order = {
   id: number;
   status: "AWAITING_PAYMENT" | "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED";
@@ -183,7 +203,6 @@ const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
   { id: "market", label: "Маркет", icon: House },
   { id: "group", label: "Групповые закупки", icon: UsersRound },
   { id: "orders", label: "Мои покупки", icon: ShoppingBag },
-  { id: "notifications", label: "Уведомления", icon: Bell },
   { id: "sales", label: "Заказы клиентов", icon: UsersRound },
   { id: "listings", label: "Мои объявления", icon: Store },
   { id: "create", label: "Создать объявление", icon: PackagePlus },
@@ -211,6 +230,7 @@ const camelProfile = (row: Record<string, unknown>): Profile => ({
     : undefined,
   registered: asBoolean(row.registered),
   sellerBlocked: asBoolean(row.seller_blocked),
+  globallyBanned: asBoolean(row.globally_banned),
   botCommissionPercent: asNumber(row.bot_commission_percent),
   commissionDebtKopecks: asNumber(row.commission_debt_kopecks),
   debtLimitKopecks: asNumber(row.debt_limit_kopecks),
@@ -331,6 +351,37 @@ const camelNotification = (
   createdAt: String(row.created_at || ""),
 });
 
+const camelGroupBuyPurchase = (
+  row: Record<string, unknown>,
+): GroupBuyPurchase => {
+  let images: string[] = [];
+  try {
+    images = JSON.parse(String(row.image_urls || "[]"));
+  } catch {
+    images = [];
+  }
+  return {
+    groupBuyId: asNumber(row.group_buy_id),
+    groupBuyStatus: String(row.group_buy_status || "COLLECTING"),
+    reservationStatus: String(row.reservation_status || "RESERVED"),
+    productTitle: String(row.product_title || ""),
+    image: images[0],
+    storeName: String(row.store_name || ""),
+    sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
+    paymentDetails: row.payment_details ? String(row.payment_details) : undefined,
+    targetCount: asNumber(row.target_count),
+    reservedCount: asNumber(row.reserved_count),
+    finalPriceKopecks: row.final_price_kopecks
+      ? asNumber(row.final_price_kopecks)
+      : undefined,
+    paymentDeadline: row.payment_deadline ? String(row.payment_deadline) : undefined,
+    deliveryFrom: row.delivery_from ? String(row.delivery_from) : undefined,
+    deliveryTo: row.delivery_to ? String(row.delivery_to) : undefined,
+    deliveryNote: row.delivery_note ? String(row.delivery_note) : undefined,
+  };
+};
+
 function dismissKeyboard(event: React.PointerEvent<HTMLElement>) {
   const target = event.target;
   if (
@@ -363,6 +414,7 @@ export function RedlineApp() {
   const [toast, setToast] = useState("");
   const [favorites, setFavorites] = useState<number[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -676,6 +728,16 @@ export function RedlineApp() {
     );
   }
 
+  if (profile?.globallyBanned) {
+    return (
+      <StatePage
+        icon={<ShieldCheck />}
+        title="Аккаунт заблокирован"
+        text="Доступ к REDLINE ограничен супер-администратором."
+      />
+    );
+  }
+
   if (profile?.registered && clubs.length > 0 && !selectedClub) {
     return (
       <ClubChoice
@@ -749,7 +811,14 @@ export function RedlineApp() {
         </label>
 
         <div className="top-actions">
-          <button className="icon-button notification-button" aria-label="Уведомления" onClick={() => navigate("notifications")}>
+          <button
+            className="icon-button notification-button"
+            aria-label="Уведомления"
+            onClick={() => {
+              setNotificationsOpen((open) => !open);
+              void reloadNotifications();
+            }}
+          >
             <Bell size={19} />
             {notifications.some((item) => !item.isRead) && (
               <em>{Math.min(99, notifications.filter((item) => !item.isRead).length)}</em>
@@ -910,15 +979,17 @@ export function RedlineApp() {
 
         {screen === "help" && <Help />}
 
-        {screen === "notifications" && (
-          <NotificationsPage
-            notifications={notifications}
-            request={request}
-            onChanged={reloadNotifications}
-            onToast={setToast}
-          />
-        )}
       </div>
+
+      {notificationsOpen && (
+        <NotificationsModal
+          notifications={notifications}
+          request={request}
+          onChanged={reloadNotifications}
+          onClose={() => setNotificationsOpen(false)}
+          onToast={setToast}
+        />
+      )}
 
       {selectedProduct && (
         <ProductModal
@@ -1179,11 +1250,12 @@ function Market({
                     setQuery("");
                   }}
                 >
-                  <span
-                    className="storefront-cover"
-                    style={store.cover ? { backgroundImage: `linear-gradient(180deg, transparent, rgba(0,0,0,.75)), url("${store.cover}")` } : undefined}
-                  >
-                    {!store.cover && store.name.slice(0, 2).toUpperCase()}
+                  <span className="storefront-cover">
+                    {store.cover ? (
+                      // Product uploads are served by the same app and lazy-loaded below the fold.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={store.cover} alt="" loading="lazy" decoding="async" />
+                    ) : store.name.slice(0, 2).toUpperCase()}
                   </span>
                   <b>{store.name}</b>
                   <small>{store.productCount} товаров{store.rating > 0 ? ` · ★ ${store.rating.toFixed(1)}` : ""}</small>
@@ -1272,7 +1344,6 @@ function ProductCard({
     <article className="product-card">
       <div
         className="product-image actual-product-image"
-        style={product.images[0] ? { backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,.75)), url("${product.images[0]}")` } : undefined}
         onClick={onOpen}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") onOpen();
@@ -1280,6 +1351,11 @@ function ProductCard({
         role="button"
         tabIndex={0}
       >
+        {product.images[0] && (
+          // Native lazy loading prevents the catalog from downloading every photo at once.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={product.images[0]} alt={product.title} loading="lazy" decoding="async" />
+        )}
         <span className={`product-badge ${product.kind === "group" ? "group-badge" : ""}`}>{product.kind === "group" ? "GROUP" : "SALE"}</span>
         <button type="button" className={`heart-button ${favorite ? "active" : ""}`} onClick={(event) => { event.stopPropagation(); onFavorite(); }} aria-label="Избранное"><Heart size={15} fill={favorite ? "currentColor" : "none"} /></button>
       </div>
@@ -1654,18 +1730,37 @@ function OrdersPage({
   onToast: (message: string) => void;
 }) {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [sellerGroupBuys, setSellerGroupBuys] = useState<Product[]>([]);
+  const [groupBuyPurchases, setGroupBuyPurchases] = useState<GroupBuyPurchase[]>([]);
   const [loading, setLoading] = useState(true);
   const [openRequisites, setOpenRequisites] = useState<number[]>([]);
   const [salesTab, setSalesTab] = useState<"active" | "completed">("active");
+  const [reportingOrder, setReportingOrder] = useState<Order | null>(null);
 
   async function loadOrders() {
     if (!club) return;
     setLoading(true);
     try {
-      const rows = await request<Record<string, unknown>[]>(
-        `/groups/${club.telegramGroupId}/orders/${mode}`,
-      );
+      const [rows, groupRows] = await Promise.all([
+        request<Record<string, unknown>[]>(
+          `/groups/${club.telegramGroupId}/orders/${mode}`,
+        ),
+        mode === "sales"
+          ? request<Record<string, unknown>[]>(
+              `/groups/${club.telegramGroupId}/my-products`,
+            )
+          : request<Record<string, unknown>[]>(
+              `/groups/${club.telegramGroupId}/group-buys/purchases`,
+            ),
+      ]);
       setOrders(rows.map(camelOrder));
+      if (mode === "sales") {
+        setSellerGroupBuys(
+          groupRows.map(camelProduct).filter((product) => product.kind === "group"),
+        );
+      } else {
+        setGroupBuyPurchases(groupRows.map(camelGroupBuyPurchase));
+      }
     } catch (ordersError) {
       onToast(
         ordersError instanceof Error
@@ -1680,11 +1775,29 @@ function OrdersPage({
   useEffect(() => {
     if (!club) return;
     let cancelled = false;
-    void request<Record<string, unknown>[]>(
-      `/groups/${club.telegramGroupId}/orders/${mode}`,
-    )
-      .then((rows) => {
-        if (!cancelled) setOrders(rows.map(camelOrder));
+    void Promise.all([
+      request<Record<string, unknown>[]>(
+        `/groups/${club.telegramGroupId}/orders/${mode}`,
+      ),
+      mode === "sales"
+        ? request<Record<string, unknown>[]>(
+            `/groups/${club.telegramGroupId}/my-products`,
+          )
+        : request<Record<string, unknown>[]>(
+            `/groups/${club.telegramGroupId}/group-buys/purchases`,
+          ),
+    ])
+      .then(([rows, groupRows]) => {
+        if (!cancelled) {
+          setOrders(rows.map(camelOrder));
+          if (mode === "sales") {
+            setSellerGroupBuys(
+              groupRows.map(camelProduct).filter((product) => product.kind === "group"),
+            );
+          } else {
+            setGroupBuyPurchases(groupRows.map(camelGroupBuyPurchase));
+          }
+        }
       })
       .catch((ordersError) => {
         if (!cancelled) {
@@ -1755,6 +1868,38 @@ function OrdersPage({
           <button className={salesTab === "completed" ? "active" : ""} onClick={() => setSalesTab("completed")}>Завершённые заказы</button>
         </div>
       )}
+      {mode === "sales" && salesTab === "active" && sellerGroupBuys.length > 0 && (
+        <>
+          <div className="subsection-heading order-group-heading"><h2>Групповые закупки</h2><p>Зафиксируйте цену, проверьте оплаты и сообщите сроки поставки.</p></div>
+          <div className="procurement-list">
+            {sellerGroupBuys.map((product) => (
+              <GroupBuyAdminCard
+                key={product.id}
+                product={product}
+                request={request}
+                onChanged={loadOrders}
+                onToast={onToast}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      {mode === "purchases" && groupBuyPurchases.length > 0 && (
+        <>
+          <div className="subsection-heading order-group-heading"><h2>Мои групповые закупки</h2><p>Брони, оплата и сроки поставки.</p></div>
+          <div className="group-purchase-list">
+            {groupBuyPurchases.map((purchase) => (
+              <GroupBuyPurchaseCard
+                key={purchase.groupBuyId}
+                purchase={purchase}
+                request={request}
+                onChanged={loadOrders}
+                onToast={onToast}
+              />
+            ))}
+          </div>
+        </>
+      )}
       {loading ? (
         <div className="empty-inline">Загружаем заказы…</div>
       ) : shownOrders.length ? (
@@ -1772,13 +1917,201 @@ function OrdersPage({
               )
             }
             onAdvance={(status) => void advance(order, status)}
+            onReport={() => setReportingOrder(order)}
             onToast={onToast}
           />
         ))
-      ) : (
+      ) : (mode === "sales" ? salesTab === "active" && sellerGroupBuys.length > 0 : groupBuyPurchases.length > 0) ? null : (
         <div className="empty-state"><ShoppingBag size={30} /><h3>Заказов пока нет</h3><p>{mode === "sales" && salesTab === "completed" ? "Завершённые и отменённые заказы будут храниться здесь." : mode === "sales" ? "Новые заказы ваших товаров появятся здесь." : "После покупки заказ появится здесь."}</p></div>
       )}
+      {reportingOrder && (
+        <ReportSellerModal
+          title="Жалоба на продавца"
+          subtitle={`Заказ #${reportingOrder.id} · ${reportingOrder.productTitle}`}
+          endpoint={`/orders/${reportingOrder.id}/reports`}
+          request={request}
+          onClose={() => setReportingOrder(null)}
+          onSent={() => {
+            setReportingOrder(null);
+            onToast("Жалоба отправлена супер-администратору");
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function ReportSellerModal({
+  title,
+  subtitle,
+  endpoint,
+  request,
+  onClose,
+  onSent,
+}: {
+  title: string;
+  subtitle: string;
+  endpoint: string;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <form
+        className="report-modal"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          setError("");
+          try {
+            await request(endpoint, {
+              method: "POST",
+              body: JSON.stringify({ reason }),
+            });
+            onSent();
+          } catch (reportError) {
+            setError(reportError instanceof Error ? reportError.message : "Не удалось отправить жалобу");
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        <div className="report-modal-icon"><AlertTriangle size={24} /></div>
+        <h2>{title}</h2>
+        <p>{subtitle}</p>
+        <label><span>Причина</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={5} minLength={5} required placeholder="Опишите проблему с продавцом или заказом" /></label>
+        {error && <p className="form-error">{error}</p>}
+        <div className="report-modal-actions">
+          <button type="button" className="outline-action" onClick={onClose}>Отменить</button>
+          <button className="main-action" disabled={saving || reason.trim().length < 5}>{saving ? "Отправляем…" : "Отправить"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function GroupBuyPurchaseCard({
+  purchase,
+  request,
+  onChanged,
+  onToast,
+}: {
+  purchase: GroupBuyPurchase;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onChanged: () => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  const statusLabels: Record<string, string> = {
+    COLLECTING: "Идёт набор участников",
+    PRICE_CONFIRMATION: "Группа собрана — продавец уточняет цену",
+    AWAITING_PAYMENT: "Нужно оплатить продавцу",
+    FORMED: "Закупка сформирована",
+    IN_DELIVERY: "Ожидается поставка",
+    COMPLETED: "Закупка завершена",
+    CANCELLED: "Закупка отменена",
+  };
+  const canPay =
+    purchase.groupBuyStatus === "AWAITING_PAYMENT" &&
+    purchase.reservationStatus === "PAYMENT_REQUESTED";
+
+  return (
+    <>
+    <article className="order-card group-purchase-card">
+      <div className="order-head">
+        <div><span className="order-number">ГРУППОВАЯ ЗАКУПКА</span><strong>{statusLabels[purchase.groupBuyStatus] || purchase.groupBuyStatus}</strong></div>
+        <div className="order-head-actions">
+          <span>{purchase.reservedCount}/{purchase.targetCount}</span>
+          <button className="report-order-button" onClick={() => setReporting(true)} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
+        </div>
+      </div>
+      <div className="order-product">
+        <div className="order-thumb actual-product-image" style={purchase.image ? { backgroundImage: `url("${purchase.image}")` } : undefined} />
+        <div>
+          <b>{purchase.productTitle}</b>
+          <span>{purchase.storeName}</span>
+          {purchase.finalPriceKopecks && <strong>{formatPrice(purchase.finalPriceKopecks)}</strong>}
+        </div>
+      </div>
+      {purchase.groupBuyStatus === "PRICE_CONFIRMATION" && (
+        <div className="group-buy-guidance">Участники набраны. Продавец обновляет актуальную цену — после этого здесь появятся сумма, реквизиты и срок оплаты.</div>
+      )}
+      {["AWAITING_PAYMENT", "FORMED", "IN_DELIVERY"].includes(purchase.groupBuyStatus) && (
+        <div className="payment-details">
+          <div className="client-details">
+            <span>ПРОДАВЕЦ</span>
+            <b>{purchase.sellerName || purchase.storeName}</b>
+            <p>{purchase.sellerUsername ? `@${purchase.sellerUsername}` : "Контакт через магазин"}</p>
+          </div>
+          {purchase.paymentDetails && purchase.groupBuyStatus === "AWAITING_PAYMENT" && (
+            <div className="requisites">
+              <div><span>Реквизиты продавца</span><strong>{purchase.paymentDetails}</strong></div>
+              <button onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(purchase.paymentDetails || "");
+                  onToast("Реквизиты скопированы");
+                } catch {
+                  onToast("Не удалось скопировать");
+                }
+              }}>Копировать</button>
+            </div>
+          )}
+          {purchase.paymentDeadline && purchase.groupBuyStatus === "AWAITING_PAYMENT" && (
+            <p className="payment-deadline">Оплатите до {new Date(purchase.paymentDeadline).toLocaleString("ru-RU")}</p>
+          )}
+        </div>
+      )}
+      {purchase.reservationStatus === "PAID" && (
+        <div className="paid-confirmation"><Check size={16} /> Вы отметили оплату. Продавец проверяет поступление.</div>
+      )}
+      {purchase.deliveryFrom && (
+        <div className="delivery-note">
+          <span>ОРИЕНТИР ПОСТАВКИ</span>
+          <b>{new Date(purchase.deliveryFrom).toLocaleDateString("ru-RU")} — {purchase.deliveryTo ? new Date(purchase.deliveryTo).toLocaleDateString("ru-RU") : "уточняется"}</b>
+          {purchase.deliveryNote && <p>{purchase.deliveryNote}</p>}
+        </div>
+      )}
+      {canPay && (
+        <button
+          className="main-action"
+          disabled={saving}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await request(`/group-buys/${purchase.groupBuyId}/paid`, { method: "POST" });
+              await onChanged();
+              onToast("Продавец получил уведомление об оплате");
+            } catch (paymentError) {
+              onToast(paymentError instanceof Error ? paymentError.message : "Не удалось отметить оплату");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "Отправляем…" : "Я оплатил"}
+        </button>
+      )}
+    </article>
+    {reporting && (
+      <ReportSellerModal
+        title="Жалоба на продавца"
+        subtitle={`Групповая закупка · ${purchase.productTitle}`}
+        endpoint={`/group-buys/${purchase.groupBuyId}/reports`}
+        request={request}
+        onClose={() => setReporting(false)}
+        onSent={() => {
+          setReporting(false);
+          onToast("Жалоба отправлена супер-администратору");
+        }}
+      />
+    )}
+    </>
   );
 }
 
@@ -1788,6 +2121,7 @@ function OrderCard({
   requisitesOpen,
   onToggleRequisites,
   onAdvance,
+  onReport,
   onToast,
 }: {
   order: Order;
@@ -1795,6 +2129,7 @@ function OrderCard({
   requisitesOpen: boolean;
   onToggleRequisites: () => void;
   onAdvance: (status: "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED") => void;
+  onReport: () => void;
   onToast: (message: string) => void;
 }) {
   const steps = [
@@ -1827,7 +2162,12 @@ function OrderCard({
     <article className={`order-card ${order.status === "AWAITING_PAYMENT" ? "featured-order" : ""}`}>
       <div className="order-head">
         <div><span className="order-number">ЗАКАЗ #{order.id}</span><strong>{statusLabel}</strong></div>
-        <span>{new Date(order.createdAt).toLocaleDateString("ru-RU")}</span>
+        <div className="order-head-actions">
+          <span>{new Date(order.createdAt).toLocaleDateString("ru-RU")}</span>
+          {mode === "purchases" && order.status !== "CANCELLED" && (
+            <button className="report-order-button" onClick={onReport} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
+          )}
+        </div>
       </div>
       <div className="order-product">
         <div
@@ -2074,15 +2414,13 @@ function CreateListing({
           <label><span>Цена продавца</span><div className="input-suffix"><input value={price} onChange={(event) => setPrice(event.target.value)} inputMode="numeric" required /><b>₽</b></div></label>
           <label><span>Количество</span><input name="stock" type="number" min="1" defaultValue="1" required /></label>
         </div>
-        {sellerRubles > 0 && (
-          <div className="price-preview">
-            <span>Цена покупателя с комиссиями</span>
-            <b>{formatPrice(finalBuyerKopecks)}</b>
-            <small>
-              Ваша цена {formatPrice(sellerRubles * 100)} + бот {profile.botCommissionPercent}% + клуб {activeClub.commissionPercent}%
-            </small>
-          </div>
-        )}
+        <div className="price-preview">
+          <span>Конечная цена для покупателя</span>
+          <b>{sellerRubles > 0 ? formatPrice(finalBuyerKopecks) : "—"}</b>
+          <small>
+            Ваша цена {sellerRubles > 0 ? formatPrice(sellerRubles * 100) : "не указана"} + бот {profile.botCommissionPercent}% + клуб {activeClub.commissionPercent}%
+          </small>
+        </div>
         {kind === "group" && (
           <div className="group-fields">
             <label><span>Участников для старта</span><input name="targetCount" type="number" min="2" defaultValue="10" required /></label>
@@ -2346,7 +2684,10 @@ function GroupBuyAdminCard({
   return (
     <article className="procurement-card">
       <div className="procurement-head">
-        <span className="shop-avatar">{product.title.slice(0, 2).toUpperCase()}</span>
+        <span
+          className="procurement-thumb actual-product-image"
+          style={product.images[0] ? { backgroundImage: `url("${product.images[0]}")` } : undefined}
+        />
         <div>
           <span className="admin-status">{statusLabel[status] || status}</span>
           <h2>{product.title}</h2>
@@ -2463,11 +2804,14 @@ function SuperAdmin({
   onCategoriesChanged: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"categories" | "groups" | "settings" | "debts">("categories");
+  const [tab, setTab] = useState<"categories" | "groups" | "settings" | "debts" | "users" | "moderation">("categories");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
   const [debts, setDebts] = useState<Record<string, unknown>[]>([]);
+  const [users, setUsers] = useState<Record<string, unknown>[]>([]);
+  const [reports, setReports] = useState<Record<string, unknown>[]>([]);
+  const [userQuery, setUserQuery] = useState("");
   const [botCommissionInput, setBotCommissionInput] = useState("0");
   const [debtLimitInput, setDebtLimitInput] = useState("0");
 
@@ -2479,10 +2823,12 @@ function SuperAdmin({
 
   async function loadAdminData() {
     try {
-      const [groupRows, settingsRow, debtRows] = await Promise.all([
+      const [groupRows, settingsRow, debtRows, userRows, reportRows] = await Promise.all([
         request<Record<string, unknown>[]>("/admin/groups"),
         request<Record<string, unknown>>("/admin/settings"),
         request<Record<string, unknown>[]>("/admin/debts"),
+        request<Record<string, unknown>[]>("/admin/users"),
+        request<Record<string, unknown>[]>("/admin/reports"),
       ]);
       setAdminGroups(groupRows.map(camelAdminGroup));
       setBotCommissionInput(String(asNumber(settingsRow.bot_commission_percent)));
@@ -2490,6 +2836,8 @@ function SuperAdmin({
         String(Math.round(asNumber(settingsRow.default_debt_limit_kopecks) / 100)),
       );
       setDebts(debtRows);
+      setUsers(userRows);
+      setReports(reportRows);
     } catch (adminError) {
       onToast(
         adminError instanceof Error
@@ -2507,6 +2855,13 @@ function SuperAdmin({
         <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы</button>
         <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Комиссия</button>
         <button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}>Долги</button>
+        <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Пользователи</button>
+        <button className={tab === "moderation" ? "active" : ""} onClick={() => setTab("moderation")}>
+          Модерация
+          {reports.filter((report) => String(report.status) === "PENDING").length > 0 && (
+            <em>{reports.filter((report) => String(report.status) === "PENDING").length}</em>
+          )}
+        </button>
       </div>
       {tab === "categories" && (
         <div className="settings-card">
@@ -2620,6 +2975,100 @@ function SuperAdmin({
           {!debts.length && <div className="empty-inline">Задолженностей нет.</div>}
         </div>
       )}
+      {tab === "users" && (
+        <div className="settings-card admin-users-panel">
+          <div><h2>Пользователи</h2><p className="settings-hint">Поиск по имени, username или Telegram ID.</p></div>
+          <div className="admin-user-search"><Search size={17} /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="Найти пользователя" /></div>
+          <div className="admin-user-grid">
+            {users
+              .filter((user) => {
+                const haystack = `${user.display_name || ""} ${user.first_name || ""} ${user.last_name || ""} ${user.username || ""} ${user.telegram_id || ""}`.toLowerCase();
+                return haystack.includes(userQuery.trim().toLowerCase());
+              })
+              .map((user) => {
+                const telegramId = asNumber(user.telegram_id);
+                const userName = String(user.display_name || [user.first_name, user.last_name].filter(Boolean).join(" ") || `ID ${telegramId}`);
+                const banned = asBoolean(user.globally_banned);
+                return (
+                  <article className={`admin-user-card ${banned ? "banned" : ""}`} key={telegramId}>
+                    <span className="profile-avatar">{userName.slice(0, 2).toUpperCase()}</span>
+                    <div><b>{userName}</b><small>{user.username ? `@${String(user.username)}` : `Telegram ID: ${telegramId}`}</small><p>{asNumber(user.order_count)} заказов · {asNumber(user.store_count)} магазинов</p></div>
+                    <button
+                      className={banned ? "unban-action" : "ban-action"}
+                      onClick={async () => {
+                        try {
+                          await request(`/admin/users/${telegramId}/ban`, {
+                            method: "PUT",
+                            body: JSON.stringify({ banned: !banned }),
+                          });
+                          await loadAdminData();
+                          onToast(banned ? "Блокировка снята" : "Пользователь заблокирован");
+                        } catch (banError) {
+                          onToast(banError instanceof Error ? banError.message : "Не удалось изменить блокировку");
+                        }
+                      }}
+                    >
+                      {banned ? "Разблокировать" : "Бан"}
+                    </button>
+                  </article>
+                );
+              })}
+          </div>
+        </div>
+      )}
+      {tab === "moderation" && (
+        <div className="admin-table-card reports-panel">
+          <div className="table-heading"><div><h2>Жалобы на продавцов</h2><p>Рассмотрите причину и примите решение.</p></div></div>
+          {reports.map((report) => {
+            const reportId = asNumber(report.id);
+            const pending = String(report.status) === "PENDING";
+            const reportStatus = {
+              PENDING: "НА РАССМОТРЕНИИ",
+              BANNED: "ПРОДАВЕЦ ЗАБЛОКИРОВАН",
+              DISMISSED: "ОТКЛОНЕНА",
+            }[String(report.status)] || String(report.status);
+            return (
+              <article className={`report-review-card ${pending ? "pending" : ""}`} key={reportId}>
+                <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}</b><small>Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
+                <p>{String(report.reason)}</p>
+                <small>От: {String(report.reporter_name || report.reporter_telegram_id)} · {new Date(String(report.created_at)).toLocaleString("ru-RU")}</small>
+                {pending && (
+                  <div className="report-review-actions">
+                    <button
+                      className="ban-action"
+                      onClick={async () => {
+                        try {
+                          await request(`/admin/reports/${reportId}`, { method: "PUT", body: JSON.stringify({ action: "BAN" }) });
+                          await loadAdminData();
+                          onToast("Продавец заблокирован, жалоба закрыта");
+                        } catch (reportError) {
+                          onToast(reportError instanceof Error ? reportError.message : "Не удалось рассмотреть жалобу");
+                        }
+                      }}
+                    >
+                      Заблокировать продавца
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await request(`/admin/reports/${reportId}`, { method: "PUT", body: JSON.stringify({ action: "DISMISS" }) });
+                          await loadAdminData();
+                          onToast("Жалоба отклонена");
+                        } catch (reportError) {
+                          onToast(reportError instanceof Error ? reportError.message : "Не удалось рассмотреть жалобу");
+                        }
+                      }}
+                    >
+                      Отклонить
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {!reports.length && <div className="empty-inline">Жалоб пока нет.</div>}
+        </div>
+      )}
     </section>
   );
 }
@@ -2683,22 +3132,28 @@ function Balance({ profile }: { profile: Profile }) {
   );
 }
 
-function NotificationsPage({
+function NotificationsModal({
   notifications,
   request,
   onChanged,
+  onClose,
   onToast,
 }: {
   notifications: AppNotification[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onChanged: () => Promise<void>;
+  onClose: () => void;
   onToast: (message: string) => void;
 }) {
   const unread = notifications.filter((item) => !item.isRead).length;
 
   return (
-    <section className="inner-page narrow-page">
-      <div className="page-title"><span className="section-kicker">INBOX</span><h1>Уведомления</h1><p>Оплата, отправка, отмена и изменения заказов внутри Mini App.</p></div>
+    <div className="notification-modal-backdrop" onClick={onClose}>
+      <section className="notification-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="notification-modal-head">
+          <div><span>INBOX</span><h2>Уведомления</h2></div>
+          <button onClick={onClose} aria-label="Закрыть уведомления"><X size={18} /></button>
+        </div>
       {unread > 0 && (
         <button
           className="outline-action notifications-read-all"
@@ -2738,7 +3193,8 @@ function NotificationsPage({
       ) : (
         <div className="empty-state"><Bell size={30} /><h3>Уведомлений пока нет</h3><p>Новые события заказов и закупок появятся здесь.</p></div>
       )}
-    </section>
+      </section>
+    </div>
   );
 }
 

@@ -231,6 +231,15 @@ public class MarketplaceController {
         );
     }
 
+    @GetMapping("/groups/{telegramGroupId}/group-buys/purchases")
+    public List<Map<String, Object>> groupBuyPurchases(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.groupBuyPurchases(
+                registered(initData).id(), telegramGroupId
+        );
+    }
+
     @GetMapping("/groups/{telegramGroupId}/orders/sales")
     public List<Map<String, Object>> salesOrders(
             @RequestHeader("X-Telegram-Init-Data") String initData,
@@ -245,6 +254,28 @@ public class MarketplaceController {
     public void advanceOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
                              @PathVariable long id, @PathVariable String status) {
         marketplace.advanceOrder(id, registered(initData).id(), status.toUpperCase());
+    }
+
+    @PostMapping("/orders/{id}/reports")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Long> reportSeller(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id,
+            @Valid @RequestBody SellerReportRequest request) {
+        return Map.of("id", marketplace.submitSellerReport(
+                registered(initData).id(), id, request.reason()
+        ));
+    }
+
+    @PostMapping("/group-buys/{id}/reports")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Long> reportGroupBuySeller(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id,
+            @Valid @RequestBody SellerReportRequest request) {
+        return Map.of("id", marketplace.submitGroupBuyReport(
+                registered(initData).id(), id, request.reason()
+        ));
     }
 
     @GetMapping("/me/notifications")
@@ -334,6 +365,43 @@ public class MarketplaceController {
         return marketplace.groups();
     }
 
+    @GetMapping("/admin/users")
+    public List<Map<String, Object>> users(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @RequestParam(defaultValue = "") String query) {
+        requireSuperAdmin(initData);
+        return marketplace.users(query);
+    }
+
+    @PutMapping("/admin/users/{telegramId}/ban")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setUserBan(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramId,
+            @RequestBody UserBanRequest request) {
+        requireSuperAdmin(initData);
+        marketplace.setGlobalUserBan(telegramId, request.banned());
+    }
+
+    @GetMapping("/admin/reports")
+    public List<Map<String, Object>> reports(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        requireSuperAdmin(initData);
+        return marketplace.sellerReports();
+    }
+
+    @PutMapping("/admin/reports/{reportId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resolveReport(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long reportId,
+            @Valid @RequestBody ResolveReportRequest request) {
+        TelegramUser admin = requireSuperAdmin(initData);
+        marketplace.resolveSellerReport(
+                reportId, admin.id(), request.action().toUpperCase()
+        );
+    }
+
     @PutMapping("/admin/groups/{groupId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void updateGroup(@RequestHeader("X-Telegram-Init-Data") String initData,
@@ -396,7 +464,11 @@ public class MarketplaceController {
 
     private TelegramUser registered(String initData) {
         TelegramUser user = authenticated(initData);
-        if (!asBoolean(marketplace.profile(user.id()).get("registered"))) {
+        Map<String, Object> profile = marketplace.profile(user.id());
+        if (asBoolean(profile.get("globally_banned"))) {
+            throw new IllegalArgumentException("Пользователь заблокирован");
+        }
+        if (!asBoolean(profile.get("registered"))) {
             throw new IllegalArgumentException("Registration is required");
         }
         return user;
@@ -440,6 +512,7 @@ public class MarketplaceController {
     ) {}
     public record ProductActiveRequest(boolean active) {}
     public record ReserveRequest(String phone) {}
+    public record SellerReportRequest(@NotBlank String reason) {}
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
@@ -447,6 +520,8 @@ public class MarketplaceController {
     public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
                                     boolean active) {}
     public record SellerBanRequest(boolean banned) {}
+    public record UserBanRequest(boolean banned) {}
+    public record ResolveReportRequest(@NotBlank String action) {}
     public record RepayDebtRequest(@Positive long amountKopecks) {}
     public record GlobalSettingsRequest(@Min(0) @Max(30) double botCommissionPercent,
                                         @Positive long debtLimitKopecks) {}

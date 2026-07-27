@@ -33,13 +33,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: "REDLINE CLUB",
     description: "Автотовары. Проверенные продавцы. Выгодные групповые закупки.",
-    images: [{ url: "/redlineclub/og.png", width: 1536, height: 1024 }],
+    images: [{ url: "/redlineclub/og.webp", width: 1672, height: 941 }],
   },
   twitter: {
     card: "summary_large_image",
     title: "REDLINE CLUB",
     description: "Премиальный автомаркет внутри Telegram.",
-    images: ["/redlineclub/og.png"],
+    images: ["/redlineclub/og.webp"],
   },
 };
 

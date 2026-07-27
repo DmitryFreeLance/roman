@@ -164,6 +164,26 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS notifications_user_idx
   ON notifications(user_telegram_id, is_read, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS seller_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER REFERENCES orders(id),
+  group_buy_id INTEGER REFERENCES group_buys(id),
+  reporter_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  reported_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING', 'BANNED', 'DISMISSED')),
+  resolved_by_telegram_id INTEGER REFERENCES users(telegram_id),
+  resolved_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (order_id IS NOT NULL OR group_buy_id IS NOT NULL),
+  UNIQUE (order_id, reporter_telegram_id),
+  UNIQUE (group_buy_id, reporter_telegram_id)
+);
+
+CREATE INDEX IF NOT EXISTS seller_reports_status_idx
+  ON seller_reports(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id INTEGER UNIQUE NOT NULL REFERENCES orders(id),

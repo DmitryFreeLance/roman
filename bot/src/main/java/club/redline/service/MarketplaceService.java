@@ -18,11 +18,13 @@ public class MarketplaceService {
     private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
     private final JdbcTemplate jdbc;
     private final TelegramApiClient telegram;
+    private final long superAdminTelegramId;
 
     public MarketplaceService(JdbcTemplate jdbc, TelegramApiClient telegram,
                               RedlineProperties properties) {
         this.jdbc = jdbc;
         this.telegram = telegram;
+        this.superAdminTelegramId = properties.marketplace().superAdminTelegramId();
     }
 
     @Transactional
@@ -253,7 +255,8 @@ public class MarketplaceService {
     public Map<String, Object> profile(long telegramId) {
         return jdbc.queryForMap("""
                 SELECT telegram_id, username, first_name, last_name,
-                       display_name, phone, selected_group_id, registered, seller_blocked,
+                       display_name, phone, selected_group_id, registered,
+                       seller_blocked, globally_banned,
                        bot_commission_percent, commission_debt_kopecks, debt_limit_kopecks
                 FROM users WHERE telegram_id = ?
                 """, telegramId);
@@ -359,13 +362,21 @@ public class MarketplaceService {
                 reserved == null ? 0 : reserved, target
         );
         if (reached) {
-            jdbc.update("""
+            int activated = jdbc.update("""
                     UPDATE group_buys SET status = 'PRICE_CONFIRMATION',
                       updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND status = 'COLLECTING'
                     """, groupBuyId);
-            notifyGroupBuySeller(groupBuyId,
-                    "Группа собрана. Обновите актуальную цену и запустите оплату.");
+            if (activated > 0) {
+                notifyGroupBuySeller(groupBuyId,
+                        "Набралось достаточно участников. Обновите актуальную цену "
+                                + "в разделе «Заказы клиентов» и запустите оплату.");
+                participantIds(groupBuyId).forEach(id -> notifyUser(id, """
+                        <b>Группа для закупки собрана!</b>
+                        Продавец уточняет актуальную цену. Скоро придёт уведомление
+                        с суммой, реквизитами и сроком оплаты.
+                        """));
+            }
         }
         return new ReservationResult(reserved == null ? 0 : reserved, target, reached);
     }
@@ -373,13 +384,37 @@ public class MarketplaceService {
     @Transactional
     public void openPayment(long groupBuyId, long sellerTelegramId, long finalPriceKopecks, int hours) {
         assertGroupBuySeller(groupBuyId, sellerTelegramId);
+        Map<String, Object> pricing = jdbc.queryForMap("""
+                SELECT p.id AS product_id, u.bot_commission_percent,
+                       g.commission_percent
+                FROM group_buys gb
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores s ON s.id = p.store_id
+                JOIN users u ON u.telegram_id = s.seller_telegram_id
+                JOIN telegram_groups g ON g.id = p.group_id
+                WHERE gb.id = ? AND s.seller_telegram_id = ?
+                """, groupBuyId, sellerTelegramId);
+        double botRate = ((Number) pricing.get("bot_commission_percent")).doubleValue();
+        double groupRate = ((Number) pricing.get("commission_percent")).doubleValue();
+        long buyerPriceKopecks = Math.round(
+                finalPriceKopecks * (1 + botRate / 100 + groupRate / 100)
+        );
         Instant deadline = Instant.now().plus(hours, ChronoUnit.HOURS);
-        jdbc.update("""
+        int updated = jdbc.update("""
                 UPDATE group_buys
                 SET status = 'AWAITING_PAYMENT', final_price_kopecks = ?,
                     payment_deadline = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'PRICE_CONFIRMATION'
-                """, finalPriceKopecks, deadline.toString(), groupBuyId);
+                """, buyerPriceKopecks, deadline.toString(), groupBuyId);
+        if (updated == 0) {
+            throw new IllegalStateException("Закупка уже перешла на другой этап");
+        }
+        jdbc.update("""
+                UPDATE products SET seller_price_kopecks = ?,
+                  updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, finalPriceKopecks,
+                ((Number) pricing.get("product_id")).longValue());
         jdbc.update("""
                 UPDATE group_buy_reservations SET status = 'PAYMENT_REQUESTED'
                 WHERE group_buy_id = ? AND status = 'RESERVED'
@@ -389,7 +424,7 @@ public class MarketplaceService {
                 <b>Закупка собрана!</b>
                 Актуальная цена: <b>%d ₽</b>.
                 Оплатите продавцу до %s и нажмите «Я оплатил» в разделе покупок.
-                """.formatted(finalPriceKopecks / 100, deadline)));
+                """.formatted(buyerPriceKopecks / 100, deadline)));
     }
 
     @Transactional
@@ -503,6 +538,40 @@ public class MarketplaceService {
                 JOIN telegram_groups g ON g.id = o.group_id
                 WHERE o.buyer_telegram_id = ? AND g.telegram_group_id = ?
                 ORDER BY o.created_at DESC
+                """, buyerTelegramId, telegramGroupId);
+    }
+
+    public List<Map<String, Object>> groupBuyPurchases(long buyerTelegramId,
+                                                       long telegramGroupId) {
+        return jdbc.queryForList("""
+                SELECT gb.id AS group_buy_id, gb.status AS group_buy_status,
+                       gb.target_count, gb.final_price_kopecks,
+                       gb.payment_deadline, gb.delivery_from, gb.delivery_to,
+                       gb.delivery_note,
+                       r.status AS reservation_status, r.created_at,
+                       p.id AS product_id, p.title AS product_title, p.image_urls,
+                       st.id AS store_id, st.name AS store_name,
+                       COALESCE(
+                         NULLIF(st.payment_details, ''),
+                         NULLIF(st.payment_card, ''),
+                         NULLIF(st.payment_phone, '')
+                       ) AS payment_details,
+                       seller.username AS seller_username,
+                       COALESCE(NULLIF(seller.display_name, ''),
+                         TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
+                         AS seller_name,
+                       (SELECT COUNT(*) FROM group_buy_reservations counted
+                        WHERE counted.group_buy_id = gb.id
+                          AND counted.status <> 'CANCELLED') AS reserved_count
+                FROM group_buy_reservations r
+                JOIN group_buys gb ON gb.id = r.group_buy_id
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                JOIN users seller ON seller.telegram_id = st.seller_telegram_id
+                JOIN telegram_groups g ON g.id = p.group_id
+                WHERE r.buyer_telegram_id = ? AND g.telegram_group_id = ?
+                  AND r.status <> 'CANCELLED'
+                ORDER BY r.created_at DESC
                 """, buyerTelegramId, telegramGroupId);
     }
 
@@ -652,6 +721,187 @@ public class MarketplaceService {
                 GROUP BY u.telegram_id
                 ORDER BY u.seller_blocked DESC, u.commission_debt_kopecks DESC
                 """);
+    }
+
+    @Transactional
+    public long submitSellerReport(long reporterTelegramId, long orderId, String reason) {
+        Map<String, Object> order = jdbc.queryForMap("""
+                SELECT buyer_telegram_id, seller_telegram_id, status
+                FROM orders WHERE id = ?
+                """, orderId);
+        if (((Number) order.get("buyer_telegram_id")).longValue() != reporterTelegramId) {
+            throw new IllegalArgumentException("Жалобу может отправить только покупатель");
+        }
+        if ("CANCELLED".equals(String.valueOf(order.get("status")))) {
+            throw new IllegalStateException("На отменённый заказ нельзя отправить жалобу");
+        }
+        String normalized = reason.strip();
+        if (normalized.length() < 5) {
+            throw new IllegalArgumentException("Опишите причину жалобы подробнее");
+        }
+        long sellerId = ((Number) order.get("seller_telegram_id")).longValue();
+        Long reportId = jdbc.queryForObject("""
+                INSERT INTO seller_reports
+                  (order_id, reporter_telegram_id, reported_telegram_id, reason, status)
+                VALUES (?, ?, ?, ?, 'PENDING')
+                ON CONFLICT (order_id, reporter_telegram_id) DO UPDATE SET
+                  reason = EXCLUDED.reason,
+                  status = 'PENDING',
+                  resolved_by_telegram_id = NULL,
+                  resolved_at = NULL
+                RETURNING id
+                """, Long.class, orderId, reporterTelegramId, sellerId, normalized);
+        Integer adminExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE telegram_id = ?",
+                Integer.class, superAdminTelegramId
+        );
+        if (adminExists != null && adminExists > 0) {
+            notifyUser(superAdminTelegramId,
+                    "<b>Новая жалоба на продавца</b>\nЗаказ #" + orderId
+                            + ". Откройте раздел «Модерация».");
+        }
+        return reportId == null ? 0 : reportId;
+    }
+
+    @Transactional
+    public long submitGroupBuyReport(long reporterTelegramId, long groupBuyId,
+                                     String reason) {
+        Map<String, Object> purchase = jdbc.queryForMap("""
+                SELECT st.seller_telegram_id
+                FROM group_buy_reservations r
+                JOIN group_buys gb ON gb.id = r.group_buy_id
+                JOIN products p ON p.id = gb.product_id
+                JOIN stores st ON st.id = p.store_id
+                WHERE r.group_buy_id = ? AND r.buyer_telegram_id = ?
+                  AND r.status <> 'CANCELLED'
+                """, groupBuyId, reporterTelegramId);
+        String normalized = reason.strip();
+        if (normalized.length() < 5) {
+            throw new IllegalArgumentException("Опишите причину жалобы подробнее");
+        }
+        long sellerId = ((Number) purchase.get("seller_telegram_id")).longValue();
+        Long reportId = jdbc.queryForObject("""
+                INSERT INTO seller_reports
+                  (group_buy_id, reporter_telegram_id, reported_telegram_id, reason, status)
+                VALUES (?, ?, ?, ?, 'PENDING')
+                ON CONFLICT (group_buy_id, reporter_telegram_id) DO UPDATE SET
+                  reason = EXCLUDED.reason,
+                  status = 'PENDING',
+                  resolved_by_telegram_id = NULL,
+                  resolved_at = NULL
+                RETURNING id
+                """, Long.class, groupBuyId, reporterTelegramId, sellerId, normalized);
+        Integer adminExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE telegram_id = ?",
+                Integer.class, superAdminTelegramId
+        );
+        if (adminExists != null && adminExists > 0) {
+            notifyUser(superAdminTelegramId,
+                    "<b>Новая жалоба на продавца</b>\nГрупповая закупка #"
+                            + groupBuyId + ". Откройте раздел «Модерация».");
+        }
+        return reportId == null ? 0 : reportId;
+    }
+
+    public List<Map<String, Object>> users(String query) {
+        String normalized = query == null ? "" : query.strip().toLowerCase();
+        String pattern = "%" + normalized + "%";
+        return jdbc.queryForList("""
+                SELECT u.telegram_id, u.username, u.first_name, u.last_name,
+                       u.display_name, u.phone, u.registered, u.globally_banned,
+                       u.seller_blocked, u.created_at,
+                       COUNT(DISTINCT o.id) AS order_count,
+                       COUNT(DISTINCT s.id) AS store_count
+                FROM users u
+                LEFT JOIN orders o ON
+                  (o.buyer_telegram_id = u.telegram_id
+                   OR o.seller_telegram_id = u.telegram_id)
+                LEFT JOIN stores s ON s.seller_telegram_id = u.telegram_id
+                WHERE ? = ''
+                   OR LOWER(COALESCE(u.display_name, '') || ' ' ||
+                            COALESCE(u.first_name, '') || ' ' ||
+                            COALESCE(u.last_name, '') || ' ' ||
+                            COALESCE(u.username, '') || ' ' ||
+                            CAST(u.telegram_id AS TEXT)) LIKE ?
+                GROUP BY u.telegram_id
+                ORDER BY u.created_at DESC
+                LIMIT 300
+                """, normalized, pattern);
+    }
+
+    @Transactional
+    public void setGlobalUserBan(long telegramId, boolean banned) {
+        if (telegramId == superAdminTelegramId) {
+            throw new IllegalArgumentException("Нельзя заблокировать супер-администратора");
+        }
+        int updated = jdbc.update("""
+                UPDATE users SET globally_banned = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ?
+                """, banned, telegramId);
+        if (updated == 0) throw new IllegalArgumentException("Пользователь не найден");
+        if (banned) {
+            jdbc.update("""
+                    UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP
+                    WHERE store_id IN (
+                      SELECT id FROM stores WHERE seller_telegram_id = ?
+                    )
+                    """, telegramId);
+        }
+        notifyUser(telegramId, banned
+                ? "<b>Аккаунт заблокирован.</b>\nОбратитесь к администратору REDLINE."
+                : "<b>Блокировка снята.</b>\nДоступ к REDLINE восстановлен.");
+    }
+
+    public List<Map<String, Object>> sellerReports() {
+        return jdbc.queryForList("""
+                SELECT r.id, r.order_id, r.group_buy_id, r.reason, r.status, r.created_at,
+                       r.reporter_telegram_id, r.reported_telegram_id,
+                       COALESCE(p.title, gp.title) AS product_title,
+                       COALESCE(NULLIF(reporter.display_name, ''),
+                         TRIM(reporter.first_name || ' ' || COALESCE(reporter.last_name, '')))
+                         AS reporter_name,
+                       reporter.username AS reporter_username,
+                       COALESCE(NULLIF(reported.display_name, ''),
+                         TRIM(reported.first_name || ' ' || COALESCE(reported.last_name, '')))
+                         AS reported_name,
+                       reported.username AS reported_username,
+                       reported.globally_banned AS reported_banned
+                FROM seller_reports r
+                LEFT JOIN orders o ON o.id = r.order_id
+                LEFT JOIN products p ON p.id = o.product_id
+                LEFT JOIN group_buys gb ON gb.id = r.group_buy_id
+                LEFT JOIN products gp ON gp.id = gb.product_id
+                JOIN users reporter ON reporter.telegram_id = r.reporter_telegram_id
+                JOIN users reported ON reported.telegram_id = r.reported_telegram_id
+                ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END,
+                         r.created_at DESC
+                """);
+    }
+
+    @Transactional
+    public void resolveSellerReport(long reportId, long adminTelegramId, String action) {
+        Map<String, Object> report = jdbc.queryForMap("""
+                SELECT reported_telegram_id, status
+                FROM seller_reports WHERE id = ?
+                """, reportId);
+        if (!"PENDING".equals(String.valueOf(report.get("status")))) {
+            throw new IllegalStateException("Жалоба уже рассмотрена");
+        }
+        long reportedId = ((Number) report.get("reported_telegram_id")).longValue();
+        String status;
+        if ("BAN".equals(action)) {
+            setGlobalUserBan(reportedId, true);
+            status = "BANNED";
+        } else if ("DISMISS".equals(action)) {
+            status = "DISMISSED";
+        } else {
+            throw new IllegalArgumentException("Неизвестное действие модерации");
+        }
+        jdbc.update("""
+                UPDATE seller_reports SET status = ?,
+                  resolved_by_telegram_id = ?, resolved_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, status, adminTelegramId, reportId);
     }
 
     public List<Map<String, Object>> groups() {
