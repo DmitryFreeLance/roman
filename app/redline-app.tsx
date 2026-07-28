@@ -17,13 +17,16 @@ import {
   ImagePlus,
   LayoutDashboard,
   Menu,
+  MessageCircle,
   Minus,
   PackagePlus,
   Pencil,
   Plus,
   Search,
+  Send,
   ShieldCheck,
   ShoppingBag,
+  ShoppingCart,
   Star,
   Store,
   Trash2,
@@ -36,6 +39,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 type Screen =
   | "market"
   | "group"
+  | "cart"
   | "orders"
   | "sales"
   | "listings"
@@ -98,6 +102,7 @@ type Buyer = {
   name: string;
   phone?: string;
   status: string;
+  selectedColorName?: string;
 };
 
 type Category = {
@@ -117,6 +122,7 @@ type Product = {
   sellerPriceKopecks: number;
   buyerPriceKopecks: number;
   images: string[];
+  colorVariants: ProductColorVariant[];
   storeId: number;
   storeName: string;
   storeImageUrl?: string;
@@ -132,6 +138,37 @@ type Product = {
   targetCount?: number;
   reservedCount: number;
   groupBuyStatus?: string;
+};
+
+type ProductColorVariant = {
+  key: string;
+  name: string;
+  hex: string;
+  images: string[];
+};
+
+type CartItem = {
+  key: string;
+  clubId: number;
+  productId: number;
+  productTitle: string;
+  storeId: number;
+  storeName: string;
+  unitPriceKopecks: number;
+  quantity: number;
+  stock: number;
+  image?: string;
+  selectedColorKey?: string;
+  selectedColorName?: string;
+};
+
+type DiscussionMessage = {
+  id: number;
+  authorTelegramId: number;
+  authorName: string;
+  authorUsername?: string;
+  body: string;
+  createdAt: string;
 };
 
 type Storefront = {
@@ -151,6 +188,21 @@ type SellerStore = {
   paymentDetails: string;
 };
 
+type SellerProfileData = {
+  hasStore: boolean;
+  storeId?: number;
+  storeName?: string;
+  storeDescription?: string;
+  storeImageUrl?: string;
+  listingCount: number;
+  activeListingCount: number;
+  completedSales: number;
+  soldUnits: number;
+  salesKopecks: number;
+  rating: number;
+  reviewCount: number;
+};
+
 type AppNotification = {
   id: number;
   title: string;
@@ -167,6 +219,7 @@ type GroupBuyPurchase = {
   image?: string;
   storeName: string;
   sellerName?: string;
+  sellerTelegramId?: number;
   sellerUsername?: string;
   paymentDetails?: string;
   targetCount: number;
@@ -176,6 +229,7 @@ type GroupBuyPurchase = {
   deliveryFrom?: string;
   deliveryTo?: string;
   deliveryNote?: string;
+  selectedColorName?: string;
 };
 
 type Order = {
@@ -191,12 +245,15 @@ type Order = {
   quantity: number;
   createdAt: string;
   sellerName?: string;
+  sellerTelegramId?: number;
   sellerUsername?: string;
   paymentDetails?: string;
   buyerName?: string;
+  buyerTelegramId?: number;
   buyerUsername?: string;
   buyerPhone?: string;
   reviewRating?: number;
+  selectedColorName?: string;
 };
 
 type TelegramWebApp = {
@@ -215,6 +272,7 @@ type TelegramWebApp = {
   exitFullscreen?: () => void;
   isVersionAtLeast?: (version: string) => boolean;
   hideKeyboard?: () => void;
+  openTelegramLink?: (url: string) => void;
   BackButton?: { hide: () => void };
   SettingsButton?: { hide: () => void };
   HapticFeedback?: {
@@ -230,10 +288,29 @@ declare global {
 }
 
 const API = "/redlineclub-api/api/v1";
+const CART_STORAGE_KEY = "redline-market-cart";
+
+const PRODUCT_COLORS: Omit<ProductColorVariant, "images">[] = [
+  { key: "black", name: "Чёрный", hex: "#111111" },
+  { key: "white", name: "Белый", hex: "#ffffff" },
+  { key: "gray", name: "Серый", hex: "#8a8a8a" },
+  { key: "red", name: "Красный", hex: "#e31b23" },
+  { key: "blue", name: "Синий", hex: "#246bdb" },
+  { key: "light-blue", name: "Голубой", hex: "#54b8e8" },
+  { key: "green", name: "Зелёный", hex: "#29a35a" },
+  { key: "yellow", name: "Жёлтый", hex: "#f1cf2f" },
+  { key: "orange", name: "Оранжевый", hex: "#f47b20" },
+  { key: "brown", name: "Коричневый", hex: "#77482f" },
+  { key: "purple", name: "Фиолетовый", hex: "#813cb0" },
+  { key: "pink", name: "Розовый", hex: "#e56b9f" },
+  { key: "beige", name: "Бежевый", hex: "#d4bd91" },
+  { key: "silver", name: "Серебристый", hex: "#c4c8cc" },
+];
 
 const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
   { id: "market", label: "Маркет", icon: House },
   { id: "group", label: "Групповые закупки", icon: UsersRound },
+  { id: "cart", label: "Корзина", icon: ShoppingCart },
   { id: "orders", label: "Мои покупки", icon: ShoppingBag },
   { id: "sales", label: "Заказы клиентов", icon: UsersRound },
   { id: "listings", label: "Мои объявления", icon: Store },
@@ -257,6 +334,20 @@ const formatMoscowDate = (value: string) =>
   parseApiDate(value).toLocaleDateString("ru-RU", { timeZone: MOSCOW_TIME_ZONE });
 const formatMoscowDateTime = (value: string) =>
   parseApiDate(value).toLocaleString("ru-RU", { timeZone: MOSCOW_TIME_ZONE });
+
+const openTelegramDialog = (telegramId: number, username?: string) => {
+  const normalizedUsername = username?.replace(/^@/, "").trim();
+  if (normalizedUsername) {
+    const url = `https://t.me/${encodeURIComponent(normalizedUsername)}`;
+    if (window.Telegram?.WebApp?.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(url);
+    } else {
+      window.location.href = url;
+    }
+    return;
+  }
+  window.location.href = `tg://user?id=${telegramId}`;
+};
 
 const asBoolean = (value: unknown) =>
   value === true || value === 1 || value === "1" || value === "true";
@@ -327,14 +418,23 @@ const camelBuyer = (row: Record<string, unknown>): Buyer => ({
     `ID ${asNumber(row.telegram_id)}`,
   phone: row.contact_phone ? String(row.contact_phone) : undefined,
   status: String(row.status || "RESERVED"),
+  selectedColorName: row.selected_color_name
+    ? String(row.selected_color_name)
+    : undefined,
 });
 
 const camelProduct = (row: Record<string, unknown>): Product => {
   let images: string[] = [];
+  let colorVariants: ProductColorVariant[] = [];
   try {
     images = JSON.parse(String(row.image_urls || "[]"));
   } catch {
     images = [];
+  }
+  try {
+    colorVariants = JSON.parse(String(row.color_variants || "[]"));
+  } catch {
+    colorVariants = [];
   }
   return {
     id: asNumber(row.id),
@@ -347,6 +447,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     sellerPriceKopecks: asNumber(row.seller_price_kopecks),
     buyerPriceKopecks: asNumber(row.buyer_price_kopecks),
     images,
+    colorVariants,
     storeId: asNumber(row.store_id),
     storeName: String(row.store_name || ""),
     storeImageUrl: row.store_image_url
@@ -372,7 +473,9 @@ const camelProduct = (row: Record<string, unknown>): Product => {
 const camelOrder = (row: Record<string, unknown>): Order => {
   let images: string[] = [];
   try {
-    images = JSON.parse(String(row.image_urls || "[]"));
+    images = JSON.parse(
+      String(row.selected_color_images || row.image_urls || "[]"),
+    );
   } catch {
     images = [];
   }
@@ -389,6 +492,9 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     quantity: Math.max(1, asNumber(row.quantity)),
     createdAt: String(row.created_at || ""),
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerTelegramId: row.seller_telegram_id
+      ? asNumber(row.seller_telegram_id)
+      : undefined,
     sellerUsername: row.seller_username
       ? String(row.seller_username)
       : undefined,
@@ -396,9 +502,15 @@ const camelOrder = (row: Record<string, unknown>): Order => {
       ? String(row.payment_details)
       : undefined,
     buyerName: row.buyer_name ? String(row.buyer_name) : undefined,
+    buyerTelegramId: row.buyer_telegram_id
+      ? asNumber(row.buyer_telegram_id)
+      : undefined,
     buyerUsername: row.buyer_username ? String(row.buyer_username) : undefined,
     buyerPhone: row.buyer_phone ? String(row.buyer_phone) : undefined,
     reviewRating: row.review_rating ? asNumber(row.review_rating) : undefined,
+    selectedColorName: row.selected_color_name
+      ? String(row.selected_color_name)
+      : undefined,
   };
 };
 
@@ -408,6 +520,27 @@ const camelStore = (row: Record<string, unknown>): SellerStore => ({
   description: row.description ? String(row.description) : undefined,
   imageUrl: row.image_url ? String(row.image_url) : undefined,
   paymentDetails: String(row.payment_details || ""),
+});
+
+const camelSellerProfile = (
+  row: Record<string, unknown>,
+): SellerProfileData => ({
+  hasStore: asBoolean(row.has_store),
+  storeId: row.store_id ? asNumber(row.store_id) : undefined,
+  storeName: row.store_name ? String(row.store_name) : undefined,
+  storeDescription: row.store_description
+    ? String(row.store_description)
+    : undefined,
+  storeImageUrl: row.store_image_url
+    ? String(row.store_image_url)
+    : undefined,
+  listingCount: asNumber(row.listing_count),
+  activeListingCount: asNumber(row.active_listing_count),
+  completedSales: asNumber(row.completed_sales),
+  soldUnits: asNumber(row.sold_units),
+  salesKopecks: asNumber(row.sales_kopecks),
+  rating: asNumber(row.rating),
+  reviewCount: asNumber(row.review_count),
 });
 
 const camelNotification = (
@@ -420,12 +553,27 @@ const camelNotification = (
   createdAt: String(row.created_at || ""),
 });
 
+const camelDiscussionMessage = (
+  row: Record<string, unknown>,
+): DiscussionMessage => ({
+  id: asNumber(row.id),
+  authorTelegramId: asNumber(row.author_telegram_id),
+  authorName: String(row.author_name || `ID ${asNumber(row.author_telegram_id)}`),
+  authorUsername: row.author_username
+    ? String(row.author_username)
+    : undefined,
+  body: String(row.body || ""),
+  createdAt: String(row.created_at || ""),
+});
+
 const camelGroupBuyPurchase = (
   row: Record<string, unknown>,
 ): GroupBuyPurchase => {
   let images: string[] = [];
   try {
-    images = JSON.parse(String(row.image_urls || "[]"));
+    images = JSON.parse(
+      String(row.selected_color_images || row.image_urls || "[]"),
+    );
   } catch {
     images = [];
   }
@@ -437,6 +585,9 @@ const camelGroupBuyPurchase = (
     image: images[0],
     storeName: String(row.store_name || ""),
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
+    sellerTelegramId: row.seller_telegram_id
+      ? asNumber(row.seller_telegram_id)
+      : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
     paymentDetails: row.payment_details ? String(row.payment_details) : undefined,
     targetCount: asNumber(row.target_count),
@@ -448,6 +599,9 @@ const camelGroupBuyPurchase = (
     deliveryFrom: row.delivery_from ? String(row.delivery_from) : undefined,
     deliveryTo: row.delivery_to ? String(row.delivery_to) : undefined,
     deliveryNote: row.delivery_note ? String(row.delivery_note) : undefined,
+    selectedColorName: row.selected_color_name
+      ? String(row.selected_color_name)
+      : undefined,
   };
 };
 
@@ -484,6 +638,7 @@ export function RedlineApp() {
       : "market";
   });
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [discussionProduct, setDiscussionProduct] = useState<Product | null>(null);
   const [activeCategory, setActiveCategory] = useState("Все");
   const [activeStoreId, setActiveStoreId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
@@ -492,7 +647,13 @@ export function RedlineApp() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [sellerFinance, setSellerFinance] = useState<SellerFinance | null>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartLoaded, setCartLoaded] = useState(false);
+  const checkoutRequestRef = useRef<{ fingerprint: string; id: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -533,6 +694,26 @@ export function RedlineApp() {
   useEffect(() => {
     window.sessionStorage.setItem("redline-active-screen", screen);
   }, [screen]);
+
+  useEffect(() => {
+    const loadCart = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem(CART_STORAGE_KEY);
+        const parsed = stored ? JSON.parse(stored) : [];
+        setCart(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setCart([]);
+      } finally {
+        setCartLoaded(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(loadCart);
+  }, []);
+
+  useEffect(() => {
+    if (!cartLoaded) return;
+    window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+  }, [cart, cartLoaded]);
 
   useEffect(() => {
     if (!toast) return;
@@ -668,9 +849,17 @@ export function RedlineApp() {
         new URLSearchParams(window.location.search).get("product"),
       );
       if (requestedProduct) {
-        setSelectedProduct(
-          nextProducts.find((product) => product.id === requestedProduct) || null,
-        );
+        const requested = nextProducts.find(
+          (product) => product.id === requestedProduct,
+        ) || null;
+        const openDiscussion =
+          new URLSearchParams(window.location.search).get("discussion") === "1";
+        if (openDiscussion) {
+          setDiscussionProduct(requested);
+          setSelectedProduct(null);
+        } else {
+          setSelectedProduct(requested);
+        }
       }
     } catch (catalogError) {
       setError(
@@ -719,19 +908,53 @@ export function RedlineApp() {
     setNotifications(rows.map(camelNotification));
   }
 
+  const marketCategoryNames = useMemo(() => {
+    const categoryOrder = new Map(
+      categories.map((category, index) => [category.name, index]),
+    );
+    return Array.from(
+      new Set(
+        products
+          .filter(
+            (product) =>
+              (activeStoreId === null || product.storeId === activeStoreId) &&
+              (!favoritesOnly || favorites.includes(product.id)),
+          )
+          .map((product) => product.category.trim())
+          .filter(Boolean),
+      ),
+    ).sort((left, right) => {
+      const leftOrder = categoryOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = categoryOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.localeCompare(right, "ru");
+    });
+  }, [activeStoreId, categories, favorites, favoritesOnly, products]);
+
+  const effectiveActiveCategory =
+    activeCategory === "Все" || marketCategoryNames.includes(activeCategory)
+      ? activeCategory
+      : "Все";
+
   const visibleProducts = useMemo(
     () =>
       products.filter(
         (product) =>
-          (activeCategory === "Все" ||
-            product.category === activeCategory) &&
+          (effectiveActiveCategory === "Все" ||
+            product.category === effectiveActiveCategory) &&
           (activeStoreId === null || product.storeId === activeStoreId) &&
           (!favoritesOnly || favorites.includes(product.id)) &&
           `${product.title} ${product.storeName}`
             .toLowerCase()
             .includes(query.toLowerCase()),
       ),
-    [activeCategory, activeStoreId, favorites, favoritesOnly, products, query],
+    [
+      activeStoreId,
+      effectiveActiveCategory,
+      favorites,
+      favoritesOnly,
+      products,
+      query,
+    ],
   );
 
   const storefronts = useMemo(() => {
@@ -759,6 +982,13 @@ export function RedlineApp() {
   }, [products]);
 
   const groupProducts = products.filter((product) => product.kind === "group");
+  const activeCartItems = cart.filter(
+    (item) => item.clubId === selectedClub?.id,
+  );
+  const cartCount = activeCartItems.reduce(
+    (total, item) => total + item.quantity,
+    0,
+  );
   const isClubOwner =
     !!profile &&
     !!selectedClub &&
@@ -807,7 +1037,7 @@ export function RedlineApp() {
     }
   }
 
-  async function reserve(product: Product) {
+  async function reserve(product: Product, selectedColorKey?: string) {
     if (!product.groupBuyId || !profile?.phone) return;
     try {
       const result = await request<{
@@ -816,7 +1046,7 @@ export function RedlineApp() {
         thresholdReached: boolean;
       }>(`/group-buys/${product.groupBuyId}/reservations`, {
         method: "POST",
-        body: JSON.stringify({ phone: profile.phone }),
+        body: JSON.stringify({ phone: profile.phone, selectedColorKey }),
       });
       setProducts((items) =>
         items.map((item) =>
@@ -845,25 +1075,115 @@ export function RedlineApp() {
     }
   }
 
-  async function buy(product: Product, quantity: number) {
-    try {
-      const requestId =
-        globalThis.crypto?.randomUUID?.() ||
-        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      await request(`/products/${product.id}/orders`, {
-        method: "POST",
-        body: JSON.stringify({ quantity, requestId }),
-      });
-      setSelectedProduct(null);
-      navigate("orders");
-      setToast(
-        `Заказ на ${quantity} шт. создан. Продавец получил одно уведомление.`,
-      );
-    } catch (buyError) {
-      setToast(
-        buyError instanceof Error ? buyError.message : "Не удалось создать заказ",
-      );
+  function addToCart(
+    product: Product,
+    quantity: number,
+    selectedColorKey?: string,
+  ) {
+    if (!selectedClub) {
+      setToast("Сначала выберите клуб");
+      return;
     }
+    const selectedColor = product.colorVariants.find(
+      (variant) => variant.key === selectedColorKey,
+    );
+    const key = `${selectedClub.id}:${product.id}:${selectedColorKey || "default"}`;
+    setCart((items) => {
+      const existing = items.find((item) => item.key === key);
+      if (existing) {
+        return items.map((item) =>
+          item.key === key
+            ? {
+                ...item,
+                quantity: Math.min(product.stock, item.quantity + quantity),
+                stock: product.stock,
+                unitPriceKopecks: product.buyerPriceKopecks,
+              }
+            : item,
+        );
+      }
+      return [
+        ...items,
+        {
+          key,
+          clubId: selectedClub.id,
+          productId: product.id,
+          productTitle: product.title,
+          storeId: product.storeId,
+          storeName: product.storeName,
+          unitPriceKopecks: product.buyerPriceKopecks,
+          quantity: Math.min(product.stock, quantity),
+          stock: product.stock,
+          image: selectedColor?.images[0] || product.images[0],
+          selectedColorKey: selectedColor?.key,
+          selectedColorName: selectedColor?.name,
+        },
+      ];
+    });
+    checkoutRequestRef.current = null;
+    setSelectedProduct(null);
+    window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("success");
+    setToast(`${product.title} добавлен в корзину`);
+  }
+
+  function updateCartQuantity(key: string, quantity: number) {
+    setCart((items) =>
+      items.map((item) =>
+        item.key === key
+          ? {
+              ...item,
+              quantity: Math.max(1, Math.min(item.stock, quantity)),
+            }
+          : item,
+      ),
+    );
+    checkoutRequestRef.current = null;
+  }
+
+  function removeFromCart(key: string) {
+    setCart((items) => items.filter((item) => item.key !== key));
+    checkoutRequestRef.current = null;
+  }
+
+  async function checkoutCart(items: CartItem[]) {
+    if (!items.length) return;
+    const fingerprint = JSON.stringify(
+      items.map((item) => [
+        item.productId,
+        item.quantity,
+        item.selectedColorKey || "",
+      ]),
+    );
+    if (checkoutRequestRef.current?.fingerprint !== fingerprint) {
+      checkoutRequestRef.current = {
+        fingerprint,
+        id:
+          globalThis.crypto?.randomUUID?.() ||
+          `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      };
+    }
+    const requestId = checkoutRequestRef.current.id;
+    const result = await request<{ ids: number[] }>("/orders/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        items: items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          selectedColorKey: item.selectedColorKey,
+        })),
+      }),
+    });
+    const clubId = items[0].clubId;
+    setCart((current) => current.filter((item) => item.clubId !== clubId));
+    checkoutRequestRef.current = null;
+    if (selectedClub) {
+      await loadCatalog(selectedClub.telegramGroupId);
+    }
+    navigate("orders");
+    setToast(
+      `Заказ оформлен: ${result.ids.length} ${result.ids.length === 1 ? "позиция" : "позиций"}.`,
+    );
   }
 
   if (loading) {
@@ -1001,6 +1321,15 @@ export function RedlineApp() {
 
         <div className="top-actions">
           <button
+            className={`icon-button cart-button ${cartCount > 0 ? "has-items" : ""}`}
+            aria-label={`Корзина, товаров: ${cartCount}`}
+            title="Корзина"
+            onClick={() => navigate("cart")}
+          >
+            <ShoppingCart size={20} />
+            {cartCount > 0 && <em>{Math.min(99, cartCount)}</em>}
+          </button>
+          <button
             className="icon-button notification-button"
             aria-label="Уведомления"
             onClick={() => {
@@ -1013,7 +1342,14 @@ export function RedlineApp() {
               <em>{Math.min(99, notifications.filter((item) => !item.isRead).length)}</em>
             )}
           </button>
-          <button className="avatar-button" onClick={() => setToast(`Профиль: ${displayName}`)}>{initial}</button>
+          <button
+            className="avatar-button"
+            onClick={() => setProfileOpen(true)}
+            aria-label="Открыть профиль продавца"
+            title="Профиль и статистика"
+          >
+            {initial}
+          </button>
         </div>
       </header>
 
@@ -1022,17 +1358,24 @@ export function RedlineApp() {
           <div className="brand-lockup"><span className="brand-slash" /><div><b>REDLINE</b><small>CLUB MARKET</small></div></div>
           <button className="icon-button" onClick={() => setDrawerOpen(false)} aria-label="Закрыть меню"><X size={21} /></button>
         </div>
-        <div className="profile-card">
-          <div className="profile-avatar">{initial}</div>
-          <div>
+        <button
+          type="button"
+          className="profile-card"
+          onClick={() => {
+            setDrawerOpen(false);
+            setProfileOpen(true);
+          }}
+        >
+          <span className="profile-avatar">{initial}</span>
+          <span className="profile-card-copy">
             <strong>{displayName}</strong>
             <span><BadgeCheck size={13} /> Зарегистрирован</span>
-          </div>
-        </div>
+          </span>
+        </button>
         <nav className="drawer-nav">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const needsClub = ["group", "orders", "sales", "listings", "create", "admin"].includes(item.id);
+            const needsClub = ["group", "cart", "orders", "sales", "listings", "create", "admin"].includes(item.id);
             const disabled = needsClub && !selectedClub;
             return (
               <button
@@ -1058,7 +1401,7 @@ export function RedlineApp() {
           <Market
             club={selectedClub}
             clubs={clubs}
-            categories={categories}
+            categoryNames={marketCategoryNames}
             products={visibleProducts}
             storefronts={storefronts}
             activeStoreId={activeStoreId}
@@ -1067,13 +1410,14 @@ export function RedlineApp() {
             setFavoritesOnly={setFavoritesOnly}
             totalProducts={products.length}
             groupCount={groupProducts.length}
-            activeCategory={activeCategory}
+            activeCategory={effectiveActiveCategory}
             setActiveCategory={setActiveCategory}
             query={query}
             setQuery={setQuery}
             favorites={favorites}
             onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
+            onDiscuss={setDiscussionProduct}
             onReserve={reserve}
             onNavigate={navigate}
           />
@@ -1087,7 +1431,20 @@ export function RedlineApp() {
             favorites={favorites}
             onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
+            onDiscuss={setDiscussionProduct}
             onReserve={reserve}
+          />
+        )}
+
+        {screen === "cart" && (
+          <CartPage
+            club={selectedClub}
+            items={activeCartItems}
+            onBack={() => navigate("market")}
+            onChangeQuantity={updateCartQuantity}
+            onRemove={removeFromCart}
+            onCheckout={checkoutCart}
+            onToast={setToast}
           />
         )}
 
@@ -1205,6 +1562,21 @@ export function RedlineApp() {
         />
       )}
 
+      {profileOpen && profile && (
+        <SellerProfileModal
+          profile={profile}
+          club={selectedClub}
+          request={request}
+          onClose={() => setProfileOpen(false)}
+          onChanged={async () => {
+            if (selectedClub) {
+              await loadCatalog(selectedClub.telegramGroupId);
+            }
+            setToast("Профиль магазина обновлён");
+          }}
+        />
+      )}
+
       {selectedProduct && (
         <ProductModal
           key={selectedProduct.id}
@@ -1212,8 +1584,25 @@ export function RedlineApp() {
           favorite={favorites.includes(selectedProduct.id)}
           onFavorite={() => void toggleFavorite(selectedProduct.id)}
           onClose={() => setSelectedProduct(null)}
-          onReserve={() => void reserve(selectedProduct)}
-          onBuy={(quantity) => buy(selectedProduct, quantity)}
+          onDiscuss={() => {
+            setDiscussionProduct(selectedProduct);
+            setSelectedProduct(null);
+          }}
+          onReserve={(selectedColorKey) =>
+            void reserve(selectedProduct, selectedColorKey)
+          }
+          onAddToCart={(quantity, selectedColorKey) =>
+            addToCart(selectedProduct, quantity, selectedColorKey)
+          }
+        />
+      )}
+
+      {discussionProduct && profile && (
+        <ProductDiscussion
+          product={discussionProduct}
+          profile={profile}
+          request={request}
+          onClose={() => setDiscussionProduct(null)}
         />
       )}
 
@@ -1368,7 +1757,7 @@ function ClubChoice({
 function Market({
   club,
   clubs,
-  categories,
+  categoryNames,
   products,
   storefronts,
   activeStoreId,
@@ -1384,12 +1773,13 @@ function Market({
   favorites,
   onFavorite,
   onOpen,
+  onDiscuss,
   onReserve,
   onNavigate,
 }: {
   club: Club | null;
   clubs: Club[];
-  categories: Category[];
+  categoryNames: string[];
   products: Product[];
   storefronts: Storefront[];
   activeStoreId: number | null;
@@ -1405,7 +1795,8 @@ function Market({
   favorites: number[];
   onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
-  onReserve: (product: Product) => Promise<void>;
+  onDiscuss: (product: Product) => void;
+  onReserve: (product: Product, selectedColorKey?: string) => Promise<void>;
   onNavigate: (screen: Screen) => void;
 }) {
   return (
@@ -1505,7 +1896,7 @@ function Market({
               {query && <button onClick={() => setQuery("")}><X size={16} /></button>}
             </div>
             <div className="category-row">
-              {["Все", ...categories.map((category) => category.name)].map((category) => (
+              {["Все", ...categoryNames].map((category) => (
                 <button key={category} className={activeCategory === category ? "active" : ""} onClick={() => setActiveCategory(category)}>{category}</button>
               ))}
             </div>
@@ -1518,7 +1909,12 @@ function Market({
                     favorite={favorites.includes(product.id)}
                     onFavorite={() => onFavorite(product.id)}
                     onOpen={() => onOpen(product)}
-                    onReserve={() => void onReserve(product)}
+                    onDiscuss={() => onDiscuss(product)}
+                    onReserve={() =>
+                      product.colorVariants.length
+                        ? onOpen(product)
+                        : void onReserve(product)
+                    }
                   />
                 ))}
               </div>
@@ -1562,12 +1958,14 @@ function ProductCard({
   favorite,
   onFavorite,
   onOpen,
+  onDiscuss,
   onReserve,
 }: {
   product: Product;
   favorite: boolean;
   onFavorite: () => void;
   onOpen: () => void;
+  onDiscuss: () => void;
   onReserve: () => void;
 }) {
   const progress = product.targetCount
@@ -1611,7 +2009,12 @@ function ProductCard({
             ) : null}
           </div>
           <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
-          <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
+          <div className="product-card-actions">
+            <button className="secondary-card-action" onClick={onDiscuss}>
+              <MessageCircle size={14} /> Обсудить
+            </button>
+            <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
+          </div>
         </div>
       </div>
     </article>
@@ -1623,24 +2026,30 @@ function ProductModal({
   favorite,
   onFavorite,
   onClose,
+  onDiscuss,
   onReserve,
-  onBuy,
+  onAddToCart,
 }: {
   product: Product;
   favorite: boolean;
   onFavorite: () => void;
   onClose: () => void;
-  onReserve: () => void;
-  onBuy: (quantity: number) => Promise<void>;
+  onDiscuss: () => void;
+  onReserve: (selectedColorKey?: string) => void;
+  onAddToCart: (quantity: number, selectedColorKey?: string) => void;
 }) {
   const [activeImage, setActiveImage] = useState(0);
+  const [activeColorKey, setActiveColorKey] = useState(
+    product.colorVariants[0]?.key || "",
+  );
   const [quantity, setQuantity] = useState(1);
-  const [buying, setBuying] = useState(false);
-  const buyingRef = useRef(false);
   const progress = product.targetCount
     ? Math.min(100, Math.round((product.reservedCount / product.targetCount) * 100))
     : 0;
-  const images = product.images.filter(Boolean);
+  const activeColor = product.colorVariants.find(
+    (variant) => variant.key === activeColorKey,
+  );
+  const images = (activeColor?.images || product.images).filter(Boolean);
   const selectedImage = images[activeImage];
 
   const changeImage = (direction: number) => {
@@ -1648,18 +2057,6 @@ function ProductModal({
     setActiveImage((current) =>
       (current + direction + images.length) % images.length,
     );
-  };
-
-  const submitBuy = async () => {
-    if (buyingRef.current) return;
-    buyingRef.current = true;
-    setBuying(true);
-    try {
-      await onBuy(quantity);
-    } finally {
-      buyingRef.current = false;
-      setBuying(false);
-    }
   };
 
   return (
@@ -1702,10 +2099,40 @@ function ProductModal({
           <span className="availability-chip">● В наличии · {product.stock} шт.</span>
           <h2>{product.title}</h2>
           <div className="rating-line modal-rating">
-            <Star size={15} fill={product.reviewCount ? "currentColor" : "none"} />
-            <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
-            <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Оценок пока нет"}</span>
+            <div>
+              <Star size={15} fill={product.reviewCount ? "currentColor" : "none"} />
+              <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
+              <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Оценок пока нет"}</span>
+            </div>
+            <button type="button" onClick={onDiscuss}>
+              <MessageCircle size={14} /> Обсудить
+            </button>
           </div>
+          {product.colorVariants.length > 0 && (
+            <section className="product-color-selector">
+              <div>
+                <span>Цвет</span>
+                <b>{activeColor?.name}</b>
+              </div>
+              <div className="product-color-options">
+                {product.colorVariants.map((variant) => (
+                  <button
+                    type="button"
+                    key={variant.key}
+                    className={variant.key === activeColorKey ? "active" : ""}
+                    onClick={() => {
+                      setActiveColorKey(variant.key);
+                      setActiveImage(0);
+                    }}
+                    aria-label={`Выбрать цвет ${variant.name}`}
+                    title={variant.name}
+                  >
+                    <i style={{ backgroundColor: variant.hex }} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           <section className="product-detail-section">
             <span>Описание</span>
             <p>{product.description}</p>
@@ -1738,17 +2165,595 @@ function ProductModal({
           )}
           <button
             className="main-action product-buy-action"
-            disabled={buying || product.stock < 1}
-            onClick={product.kind === "group" ? onReserve : () => void submitBuy()}
+            disabled={product.stock < 1}
+            onClick={
+              product.kind === "group"
+                ? () => onReserve(activeColor?.key)
+                : () => onAddToCart(quantity, activeColor?.key)
+            }
           >
             {product.kind === "group"
               ? "Забронировать место"
-              : buying
-                ? "Создаём заказ…"
-                : `Купить · ${formatPrice(product.buyerPriceKopecks * quantity)}`}
+              : `В корзину · ${formatPrice(product.buyerPriceKopecks * quantity)}`}
           </button>
         </div>
       </article>
+    </div>
+  );
+}
+
+function CartPage({
+  club,
+  items,
+  onBack,
+  onChangeQuantity,
+  onRemove,
+  onCheckout,
+  onToast,
+}: {
+  club: Club | null;
+  items: CartItem[];
+  onBack: () => void;
+  onChangeQuantity: (key: string, quantity: number) => void;
+  onRemove: (key: string) => void;
+  onCheckout: (items: CartItem[]) => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const [checkingOut, setCheckingOut] = useState(false);
+  const checkoutRef = useRef(false);
+  const storeGroups = useMemo(() => {
+    const grouped = new Map<
+      number,
+      { storeId: number; storeName: string; items: CartItem[] }
+    >();
+    for (const item of items) {
+      const current = grouped.get(item.storeId);
+      if (current) {
+        current.items.push(item);
+      } else {
+        grouped.set(item.storeId, {
+          storeId: item.storeId,
+          storeName: item.storeName,
+          items: [item],
+        });
+      }
+    }
+    return Array.from(grouped.values());
+  }, [items]);
+  const total = items.reduce(
+    (sum, item) => sum + item.unitPriceKopecks * item.quantity,
+    0,
+  );
+  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+
+  const submit = async () => {
+    if (checkoutRef.current || !items.length) return;
+    checkoutRef.current = true;
+    setCheckingOut(true);
+    try {
+      await onCheckout(items);
+    } catch (checkoutError) {
+      onToast(
+        checkoutError instanceof Error
+          ? checkoutError.message
+          : "Не удалось оформить заказ",
+      );
+    } finally {
+      checkoutRef.current = false;
+      setCheckingOut(false);
+    }
+  };
+
+  return (
+    <section className="inner-page narrow-page cart-page">
+      <div className="cart-page-head">
+        <div className="page-title">
+          <span className="section-kicker">SHOPPING CART</span>
+          <h1>Корзина</h1>
+          <p>
+            {club
+              ? `Товары клуба ${club.title}`
+              : "Выберите клуб, чтобы открыть его корзину"}
+          </p>
+        </div>
+        <button type="button" className="cart-back-button" onClick={onBack}>
+          <ArrowLeft size={15} /> В магазин
+        </button>
+      </div>
+
+      {!club ? (
+        <div className="empty-state">
+          <ShoppingCart size={30} />
+          <h3>Клуб не выбран</h3>
+          <p>Выберите клуб в верхней панели.</p>
+        </div>
+      ) : !items.length ? (
+        <div className="empty-state">
+          <ShoppingCart size={30} />
+          <h3>Корзина пока пуста</h3>
+          <p>Откройте товар, выберите количество и добавьте его в корзину.</p>
+          <button className="main-action" onClick={onBack}>
+            Перейти к товарам
+          </button>
+        </div>
+      ) : (
+        <div className="cart-layout">
+          <div className="cart-store-list">
+            {storeGroups.map((group) => (
+              <section className="cart-store-group" key={group.storeId}>
+                <div className="cart-store-heading">
+                  <Store size={15} />
+                  <span>Магазин</span>
+                  <b>{group.storeName}</b>
+                </div>
+                {group.items.map((item) => (
+                  <article className="cart-item" key={item.key}>
+                    <div className="cart-item-image actual-product-image">
+                      {item.image && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={item.image} alt={item.productTitle} />
+                      )}
+                    </div>
+                    <div className="cart-item-copy">
+                      <span>{item.storeName}</span>
+                      <b>{item.productTitle}</b>
+                      {item.selectedColorName && (
+                        <small>Цвет: {item.selectedColorName}</small>
+                      )}
+                      <strong>
+                        {formatPrice(item.unitPriceKopecks * item.quantity)}
+                      </strong>
+                    </div>
+                    <div className="cart-item-controls">
+                      <div>
+                        <button
+                          type="button"
+                          disabled={item.quantity <= 1}
+                          onClick={() =>
+                            onChangeQuantity(item.key, item.quantity - 1)
+                          }
+                          aria-label="Уменьшить количество"
+                        >
+                          <Minus size={15} />
+                        </button>
+                        <b>{item.quantity}</b>
+                        <button
+                          type="button"
+                          disabled={item.quantity >= item.stock}
+                          onClick={() =>
+                            onChangeQuantity(item.key, item.quantity + 1)
+                          }
+                          aria-label="Увеличить количество"
+                        >
+                          <Plus size={15} />
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className="cart-remove-button"
+                        onClick={() => onRemove(item.key)}
+                        aria-label={`Удалить ${item.productTitle}`}
+                      >
+                        <Trash2 size={15} /> Удалить
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            ))}
+          </div>
+          <aside className="cart-summary">
+            <div>
+              <span>Позиций</span>
+              <b>{items.length}</b>
+            </div>
+            <div>
+              <span>Товаров</span>
+              <b>{itemCount}</b>
+            </div>
+            <div className="cart-summary-total">
+              <span>Итого</span>
+              <strong>{formatPrice(total)}</strong>
+            </div>
+            <button
+              type="button"
+              className="main-action"
+              disabled={checkingOut}
+              onClick={() => void submit()}
+            >
+              <ShoppingCart size={18} />
+              {checkingOut
+                ? "Оформляем…"
+                : `Оформить заказ · ${formatPrice(total)}`}
+            </button>
+            <small>
+              Заказы создаются одновременно. Если хотя бы одной позиции уже
+              недостаточно, корзина останется без изменений.
+            </small>
+          </aside>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProductDiscussion({
+  product,
+  profile,
+  request,
+  onClose,
+}: {
+  product: Product;
+  profile: Profile;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onClose: () => void;
+}) {
+  const [messages, setMessages] = useState<DiscussionMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  async function loadMessages(showLoading = false) {
+    if (showLoading) setLoading(true);
+    try {
+      const rows = await request<Record<string, unknown>[]>(
+        `/products/${product.id}/discussion`,
+      );
+      setMessages(rows.map(camelDiscussionMessage));
+      setError("");
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Не удалось загрузить обсуждение",
+      );
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async (showLoading = false) => {
+      if (cancelled) return;
+      await loadMessages(showLoading);
+    };
+    void refresh(true);
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // Discussion polling is scoped to the selected product.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product.id]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = draft.trim();
+    if (!body || sending) return;
+    setSending(true);
+    setError("");
+    try {
+      await request(`/products/${product.id}/discussion`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      });
+      setDraft("");
+      await loadMessages();
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error
+          ? sendError.message
+          : "Не удалось отправить сообщение",
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="discussion-backdrop">
+      <section className="product-discussion" aria-label={`Обсуждение товара ${product.title}`}>
+        <header className="discussion-header">
+          <button type="button" onClick={onClose} aria-label="Закрыть обсуждение">
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <span>ОБСУЖДЕНИЕ ТОВАРА</span>
+            <b>{product.title}</b>
+          </div>
+          <MessageCircle size={21} />
+        </header>
+        <div className="discussion-product">
+          {product.images[0] && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={product.images[0]} alt="" />
+          )}
+          <div>
+            <b>{product.title}</b>
+            <span>{formatPrice(product.buyerPriceKopecks)} · {product.storeName}</span>
+          </div>
+        </div>
+        <div className="discussion-messages">
+          {loading ? (
+            <div className="discussion-empty">Загружаем сообщения…</div>
+          ) : messages.length === 0 ? (
+            <div className="discussion-empty">
+              <MessageCircle size={28} />
+              <b>Начните обсуждение</b>
+              <span>Спросите о товаре, совместимости, комплекте или доставке.</span>
+            </div>
+          ) : (
+            messages.map((message) => {
+              const mine = message.authorTelegramId === profile.telegramId;
+              return (
+                <article
+                  key={message.id}
+                  className={`discussion-message ${mine ? "mine" : ""}`}
+                >
+                  <div>
+                    <b>{mine ? "Вы" : message.authorName}</b>
+                    <time>{formatMoscowDateTime(message.createdAt)}</time>
+                  </div>
+                  <p>{message.body}</p>
+                </article>
+              );
+            })
+          )}
+          <div ref={bottomRef} />
+        </div>
+        <form className="discussion-composer" onSubmit={sendMessage}>
+          {error && <p>{error}</p>}
+          <div>
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              maxLength={2000}
+              rows={1}
+              placeholder="Напишите сообщение…"
+              aria-label="Сообщение в обсуждение"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            <button type="submit" disabled={sending || !draft.trim()} aria-label="Отправить">
+              <Send size={18} />
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function SellerProfileModal({
+  profile,
+  club,
+  request,
+  onClose,
+  onChanged,
+}: {
+  profile: Profile;
+  club: Club | null;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [sellerProfile, setSellerProfile] =
+    useState<SellerProfileData | null>(null);
+  const [storeName, setStoreName] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [loading, setLoading] = useState(!!club);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const displayName =
+    profile.displayName ||
+    [profile.firstName, profile.lastName].filter(Boolean).join(" ") ||
+    `ID ${profile.telegramId}`;
+
+  async function loadProfile() {
+    if (!club) return;
+    setLoading(true);
+    try {
+      const row = await request<Record<string, unknown>>(
+        `/me/seller-profile/${club.telegramGroupId}`,
+      );
+      const next = camelSellerProfile(row);
+      setSellerProfile(next);
+      setStoreName(next.storeName || "");
+      setError("");
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Не удалось загрузить профиль",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!club) return;
+    let cancelled = false;
+    void request<Record<string, unknown>>(
+      `/me/seller-profile/${club.telegramGroupId}`,
+    )
+      .then((row) => {
+        if (cancelled) return;
+        const next = camelSellerProfile(row);
+        setSellerProfile(next);
+        setStoreName(next.storeName || "");
+        setError("");
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Не удалось загрузить профиль",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // The seller profile is scoped to the selected club.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [club?.telegramGroupId]);
+
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview);
+    },
+    [preview],
+  );
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sellerProfile?.storeId) return;
+    setSaving(true);
+    setError("");
+    try {
+      let imageUrl = sellerProfile.storeImageUrl || "";
+      if (file) {
+        const body = new FormData();
+        body.append("file", file);
+        const uploaded = await request<{ url: string }>("/uploads", {
+          method: "POST",
+          body,
+        });
+        imageUrl = uploaded.url;
+      }
+      await request(`/stores/${sellerProfile.storeId}/profile`, {
+        method: "PUT",
+        body: JSON.stringify({ name: storeName, imageUrl }),
+      });
+      setFile(null);
+      if (preview) {
+        URL.revokeObjectURL(preview);
+        setPreview("");
+      }
+      await Promise.all([loadProfile(), onChanged()]);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Не удалось обновить магазин",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop profile-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="seller-profile-modal">
+        <header className="seller-profile-head">
+          <div>
+            <span className="section-kicker">SELLER PROFILE</span>
+            <h2>Мой профиль</h2>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Закрыть профиль">
+            <X size={20} />
+          </button>
+        </header>
+        <div className="seller-identity">
+          <span className="profile-avatar">
+            {displayName.slice(0, 2).toUpperCase()}
+          </span>
+          <div>
+            <b>{displayName}</b>
+            <small>
+              {profile.username
+                ? `@${profile.username}`
+                : `Telegram ID: ${profile.telegramId}`}
+              {profile.phone ? ` · ${profile.phone}` : ""}
+            </small>
+            <em>{club ? club.title : "Клуб не выбран"}</em>
+          </div>
+        </div>
+
+        {!club ? (
+          <div className="profile-empty">
+            <Store size={28} />
+            <b>Выберите клуб</b>
+            <span>Статистика и магазин показываются отдельно для каждого клуба.</span>
+          </div>
+        ) : loading ? (
+          <div className="profile-empty">Загружаем статистику…</div>
+        ) : sellerProfile?.hasStore ? (
+          <>
+            <div className="seller-profile-stats">
+              <div><PackagePlus size={17} /><span>Объявления</span><b>{sellerProfile.listingCount}</b><small>{sellerProfile.activeListingCount} активных</small></div>
+              <div><ShoppingBag size={17} /><span>Продажи</span><b>{sellerProfile.completedSales}</b><small>{sellerProfile.soldUnits} товаров</small></div>
+              <div><WalletCards size={17} /><span>Выручка</span><b>{formatPrice(sellerProfile.salesKopecks)}</b><small>после завершения</small></div>
+              <div><Star size={17} /><span>Рейтинг</span><b>{sellerProfile.reviewCount ? sellerProfile.rating.toFixed(1) : "—"}</b><small>{sellerProfile.reviewCount} оценок</small></div>
+            </div>
+            <form className="seller-profile-form" onSubmit={saveProfile}>
+              <label className="profile-store-image">
+                {(preview || sellerProfile.storeImageUrl) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={preview || sellerProfile.storeImageUrl}
+                    alt="Фотография магазина"
+                  />
+                ) : (
+                  <div><ImagePlus size={28} /><span>Добавить фото магазина</span></div>
+                )}
+                <em><Pencil size={13} /> Изменить фото</em>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(event) => {
+                    if (preview) URL.revokeObjectURL(preview);
+                    const nextFile = event.target.files?.[0] || null;
+                    setFile(nextFile);
+                    setPreview(nextFile ? URL.createObjectURL(nextFile) : "");
+                  }}
+                />
+              </label>
+              <label>
+                <span>Название магазина</span>
+                <input
+                  value={storeName}
+                  onChange={(event) => setStoreName(event.target.value)}
+                  maxLength={100}
+                  required
+                />
+              </label>
+              {error && <p className="form-error">{error}</p>}
+              <button
+                className="main-action"
+                disabled={saving || !storeName.trim()}
+              >
+                {saving ? "Сохраняем…" : "Сохранить профиль магазина"}
+              </button>
+            </form>
+          </>
+        ) : (
+          <div className="profile-empty">
+            <Store size={28} />
+            <b>Магазина в этом клубе пока нет</b>
+            <span>Создайте первое объявление — вместе с ним появится магазин и статистика.</span>
+          </div>
+        )}
+        {error && !sellerProfile?.hasStore && <p className="form-error">{error}</p>}
+      </section>
     </div>
   );
 }
@@ -1760,6 +2765,7 @@ function SimpleList({
   favorites,
   onFavorite,
   onOpen,
+  onDiscuss,
   onReserve,
 }: {
   title: string;
@@ -1768,7 +2774,8 @@ function SimpleList({
   favorites: number[];
   onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
-  onReserve: (product: Product) => Promise<void>;
+  onDiscuss: (product: Product) => void;
+  onReserve: (product: Product, selectedColorKey?: string) => Promise<void>;
 }) {
   return (
     <section className="inner-page">
@@ -1776,7 +2783,19 @@ function SimpleList({
       {products.length ? (
         <div className="catalog-grid">
           {products.map((product) => (
-            <ProductCard key={product.id} product={product} favorite={favorites.includes(product.id)} onFavorite={() => onFavorite(product.id)} onOpen={() => onOpen(product)} onReserve={() => void onReserve(product)} />
+            <ProductCard
+              key={product.id}
+              product={product}
+              favorite={favorites.includes(product.id)}
+              onFavorite={() => onFavorite(product.id)}
+              onOpen={() => onOpen(product)}
+              onDiscuss={() => onDiscuss(product)}
+              onReserve={() =>
+                product.colorVariants.length
+                  ? onOpen(product)
+                  : void onReserve(product)
+              }
+            />
           ))}
         </div>
       ) : (
@@ -1998,6 +3017,7 @@ function EditListingModal({
           stock: Number(form.get("stock")),
           sellerPriceKopecks: Math.round(Number(form.get("price")) * 100),
           imageUrlsJson: JSON.stringify(images),
+          colorVariantsJson: JSON.stringify(product.colorVariants),
         }),
       });
       await onSaved();
@@ -2027,19 +3047,25 @@ function EditListingModal({
                 <img key={`${preview}-${index}`} src={preview} alt={`Фото ${index + 1}`} />
               ))}
             </div>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              onChange={(event) => {
-                previews.forEach((preview) => URL.revokeObjectURL(preview));
-                const nextFiles = Array.from(event.target.files || []).slice(0, 6);
-                setFiles(nextFiles);
-                setPreviews(nextFiles.map((file) => URL.createObjectURL(file)));
-              }}
-            />
+            {product.colorVariants.length === 0 && (
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(event) => {
+                  previews.forEach((preview) => URL.revokeObjectURL(preview));
+                  const nextFiles = Array.from(event.target.files || []).slice(0, 6);
+                  setFiles(nextFiles);
+                  setPreviews(nextFiles.map((file) => URL.createObjectURL(file)));
+                }}
+              />
+            )}
           </label>
-          <p className="upload-caption">Нажмите на фото, чтобы заменить весь набор.</p>
+          <p className="upload-caption">
+            {product.colorVariants.length
+              ? "Фотографии распределены по цветам и сохранятся без изменений."
+              : "Нажмите на фото, чтобы заменить весь набор."}
+          </p>
           <label><span>Название товара</span><input name="title" defaultValue={product.title} required /></label>
           <label>
             <span>Категория</span>
@@ -2389,6 +3415,21 @@ function GroupBuyPurchaseCard({
         <div><span className="order-number">ГРУППОВАЯ ЗАКУПКА</span><strong>{statusLabels[purchase.groupBuyStatus] || purchase.groupBuyStatus}</strong></div>
         <div className="order-head-actions">
           <span>{purchase.reservedCount}/{purchase.targetCount}</span>
+          {purchase.sellerTelegramId && (
+            <button
+              className="contact-order-button"
+              onClick={() =>
+                openTelegramDialog(
+                  purchase.sellerTelegramId!,
+                  purchase.sellerUsername,
+                )
+              }
+              aria-label="Связаться с продавцом"
+              title="Связаться"
+            >
+              <MessageCircle size={15} />
+            </button>
+          )}
           <button className="report-order-button" onClick={() => setReporting(true)} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
         </div>
       </div>
@@ -2396,7 +3437,10 @@ function GroupBuyPurchaseCard({
         <div className="order-thumb actual-product-image" style={purchase.image ? { backgroundImage: `url("${purchase.image}")` } : undefined} />
         <div>
           <b>{purchase.productTitle}</b>
-          <span>{purchase.storeName}</span>
+          <span>
+            {purchase.storeName}
+            {purchase.selectedColorName ? ` · Цвет: ${purchase.selectedColorName}` : ""}
+          </span>
           {purchase.finalPriceKopecks && <strong>{formatPrice(purchase.finalPriceKopecks)}</strong>}
         </div>
       </div>
@@ -2533,6 +3577,31 @@ function OrderCard({
         <div><span className="order-number">ЗАКАЗ #{order.id}</span><strong>{statusLabel}</strong></div>
         <div className="order-head-actions">
           <span>{formatMoscowDate(order.createdAt)}</span>
+          {(mode === "purchases"
+            ? order.sellerTelegramId
+            : order.buyerTelegramId) && (
+            <button
+              className="contact-order-button"
+              onClick={() =>
+                openTelegramDialog(
+                  mode === "purchases"
+                    ? order.sellerTelegramId!
+                    : order.buyerTelegramId!,
+                  mode === "purchases"
+                    ? order.sellerUsername
+                    : order.buyerUsername,
+                )
+              }
+              aria-label={
+                mode === "purchases"
+                  ? "Связаться с продавцом"
+                  : "Связаться с покупателем"
+              }
+              title="Связаться"
+            >
+              <MessageCircle size={15} />
+            </button>
+          )}
           {mode === "purchases" && order.status !== "CANCELLED" && (
             <button className="report-order-button" onClick={onReport} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
           )}
@@ -2545,7 +3614,10 @@ function OrderCard({
         />
         <div>
           <b>{order.productTitle}</b>
-          <span>{order.storeName} · {order.quantity} шт.</span>
+          <span>
+            {order.storeName} · {order.quantity} шт.
+            {order.selectedColorName ? ` · Цвет: ${order.selectedColorName}` : ""}
+          </span>
           <strong>{formatPrice(order.buyerPriceKopecks)}</strong>
         </div>
       </div>
@@ -2707,6 +3779,11 @@ function CreateListing({
   const [kind, setKind] = useState<"regular" | "group">("regular");
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [multipleColors, setMultipleColors] = useState(false);
+  const [selectedColorKeys, setSelectedColorKeys] = useState<string[]>([]);
+  const [colorFiles, setColorFiles] = useState<Record<string, File[]>>({});
+  const [colorPreviews, setColorPreviews] = useState<Record<string, string[]>>({});
+  const colorPreviewsRef = useRef<Record<string, string[]>>({});
   const [storeFile, setStoreFile] = useState<File | null>(null);
   const [storePreview, setStorePreview] = useState("");
   const [price, setPrice] = useState("");
@@ -2719,6 +3796,18 @@ function CreateListing({
   useEffect(
     () => () => previews.forEach((preview) => URL.revokeObjectURL(preview)),
     [previews],
+  );
+
+  useEffect(() => {
+    colorPreviewsRef.current = colorPreviews;
+  }, [colorPreviews]);
+
+  useEffect(
+    () => () =>
+      Object.values(colorPreviewsRef.current)
+        .flat()
+        .forEach((preview) => URL.revokeObjectURL(preview)),
+    [],
   );
 
   useEffect(
@@ -2786,8 +3875,19 @@ function CreateListing({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!files.length) {
+    if (!multipleColors && !files.length) {
       setError("Добавьте хотя бы одну фотографию.");
+      return;
+    }
+    if (multipleColors && selectedColorKeys.length < 2) {
+      setError("Выберите минимум два доступных цвета.");
+      return;
+    }
+    if (
+      multipleColors &&
+      selectedColorKeys.some((key) => !(colorFiles[key]?.length > 0))
+    ) {
+      setError("Для каждого выбранного цвета загрузите хотя бы одну фотографию.");
       return;
     }
     if (!store && !storeFile) {
@@ -2798,13 +3898,30 @@ function CreateListing({
     setError("");
     const form = new FormData(event.currentTarget);
     try {
-      const uploaded = await Promise.all(
-        files.map(async (file) => {
-          const body = new FormData();
-          body.append("file", file);
-          return request<{ url: string }>("/uploads", { method: "POST", body });
-        }),
-      );
+      const uploadFile = async (file: File) => {
+        const body = new FormData();
+        body.append("file", file);
+        return request<{ url: string }>("/uploads", { method: "POST", body });
+      };
+      let imageUrls: string[] = [];
+      let colorVariants: ProductColorVariant[] = [];
+      if (multipleColors) {
+        colorVariants = await Promise.all(
+          PRODUCT_COLORS.filter((color) =>
+            selectedColorKeys.includes(color.key),
+          ).map(async (color) => ({
+            ...color,
+            images: (
+              await Promise.all((colorFiles[color.key] || []).map(uploadFile))
+            ).map((item) => item.url),
+          })),
+        );
+        imageUrls = colorVariants.flatMap((variant) => variant.images);
+      } else {
+        imageUrls = (await Promise.all(files.map(uploadFile))).map(
+          (item) => item.url,
+        );
+      }
 
       if (!store) {
         const storeImageBody = new FormData();
@@ -2837,7 +3954,8 @@ function CreateListing({
           stock: Number(form.get("stock")),
           sellerPriceKopecks: rubles * 100,
           kind: kind === "group" ? "GROUP_BUY" : "REGULAR",
-          imageUrlsJson: JSON.stringify(uploaded.map((item) => item.url)),
+          imageUrlsJson: JSON.stringify(imageUrls),
+          colorVariantsJson: JSON.stringify(colorVariants),
           targetCount: kind === "group" ? Number(form.get("targetCount")) : null,
           collectionDays: kind === "group" ? Number(form.get("collectionDays")) : null,
         }),
@@ -2926,31 +4044,154 @@ function CreateListing({
             <label><span>Общие реквизиты продавца</span><input name="paymentDetails" required placeholder="Один номер карты, СБП или пояснение" /></label>
           </div>
         )}
-        <label className={`upload-area ${previews.length ? "has-preview" : ""}`}>
-          {previews.length ? (
-            <div className={`upload-preview-grid ${previews.length === 1 ? "single-photo" : ""}`}>
-              {previews.map((preview, index) => (
-                // Blob previews exist only in the browser and cannot use next/image.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={preview} src={preview} alt={`Фото ${index + 1}`} />
-              ))}
-            </div>
-          ) : (
-            <><ImagePlus size={30} /><b>Добавить фотографии</b><span>До 6 изображений · JPG, PNG, WEBP</span></>
-          )}
+        <label className="checkbox-label color-mode-checkbox">
           <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            multiple
+            type="checkbox"
+            checked={multipleColors}
             onChange={(event) => {
-              previews.forEach((preview) => URL.revokeObjectURL(preview));
-              const nextFiles = Array.from(event.target.files || []).slice(0, 6);
-              setFiles(nextFiles);
-              setPreviews(nextFiles.map((file) => URL.createObjectURL(file)));
+              setMultipleColors(event.target.checked);
+              setError("");
             }}
           />
+          <span>
+            <b>Несколько цветов</b>
+            <small>Для каждого выбранного цвета потребуются отдельные фотографии.</small>
+          </span>
         </label>
-        {previews.length > 0 && <p className="upload-caption">{previews.length} фото выбрано. Нажмите на область, чтобы заменить.</p>}
+        {multipleColors ? (
+          <div className="color-variant-editor">
+            <div className="color-picker-heading">
+              <span>Доступные цвета</span>
+              <small>Выберите минимум два</small>
+            </div>
+            <div className="color-picker-grid">
+              {PRODUCT_COLORS.map((color) => {
+                const selected = selectedColorKeys.includes(color.key);
+                return (
+                  <button
+                    type="button"
+                    key={color.key}
+                    className={selected ? "active" : ""}
+                    onClick={() => {
+                      if (selected) {
+                        (colorPreviews[color.key] || []).forEach((preview) =>
+                          URL.revokeObjectURL(preview),
+                        );
+                        setSelectedColorKeys((keys) =>
+                          keys.filter((key) => key !== color.key),
+                        );
+                        setColorFiles((items) => {
+                          const next = { ...items };
+                          delete next[color.key];
+                          return next;
+                        });
+                        setColorPreviews((items) => {
+                          const next = { ...items };
+                          delete next[color.key];
+                          return next;
+                        });
+                      } else {
+                        setSelectedColorKeys((keys) => [...keys, color.key]);
+                      }
+                    }}
+                    aria-pressed={selected}
+                  >
+                    <i style={{ backgroundColor: color.hex }} />
+                    <span>{color.name}</span>
+                    {selected && <Check size={13} />}
+                  </button>
+                );
+              })}
+            </div>
+            {PRODUCT_COLORS.filter((color) =>
+              selectedColorKeys.includes(color.key),
+            ).map((color) => {
+              const selectedPreviews = colorPreviews[color.key] || [];
+              return (
+                <div className="color-photo-field" key={color.key}>
+                  <div className="color-photo-title">
+                    <i style={{ backgroundColor: color.hex }} />
+                    <div>
+                      <b>{color.name}</b>
+                      <span>
+                        {selectedPreviews.length
+                          ? `${selectedPreviews.length} фото`
+                          : "Фотографии обязательны"}
+                      </span>
+                    </div>
+                  </div>
+                  <label className={`upload-area compact ${selectedPreviews.length ? "has-preview" : ""}`}>
+                    {selectedPreviews.length ? (
+                      <div className={`upload-preview-grid ${selectedPreviews.length === 1 ? "single-photo" : ""}`}>
+                        {selectedPreviews.map((preview, index) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={preview} src={preview} alt={`${color.name}, фото ${index + 1}`} />
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <ImagePlus size={24} />
+                        <b>Фото цвета «{color.name}»</b>
+                        <span>От 1 до 6 изображений</span>
+                      </>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      onChange={(event) => {
+                        (colorPreviews[color.key] || []).forEach((preview) =>
+                          URL.revokeObjectURL(preview),
+                        );
+                        const nextFiles = Array.from(
+                          event.target.files || [],
+                        ).slice(0, 6);
+                        setColorFiles((items) => ({
+                          ...items,
+                          [color.key]: nextFiles,
+                        }));
+                        setColorPreviews((items) => ({
+                          ...items,
+                          [color.key]: nextFiles.map((file) =>
+                            URL.createObjectURL(file),
+                          ),
+                        }));
+                      }}
+                    />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            <label className={`upload-area ${previews.length ? "has-preview" : ""}`}>
+              {previews.length ? (
+                <div className={`upload-preview-grid ${previews.length === 1 ? "single-photo" : ""}`}>
+                  {previews.map((preview, index) => (
+                    // Blob previews exist only in the browser and cannot use next/image.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img key={preview} src={preview} alt={`Фото ${index + 1}`} />
+                  ))}
+                </div>
+              ) : (
+                <><ImagePlus size={30} /><b>Добавить фотографии</b><span>До 6 изображений · JPG, PNG, WEBP</span></>
+              )}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(event) => {
+                  previews.forEach((preview) => URL.revokeObjectURL(preview));
+                  const nextFiles = Array.from(event.target.files || []).slice(0, 6);
+                  setFiles(nextFiles);
+                  setPreviews(nextFiles.map((file) => URL.createObjectURL(file)));
+                }}
+              />
+            </label>
+            {previews.length > 0 && <p className="upload-caption">{previews.length} фото выбрано. Нажмите на область, чтобы заменить.</p>}
+          </>
+        )}
         <label><span>Название товара</span><input name="title" required placeholder="Например, кованые диски R20" /></label>
         <label>
           <span>Категория</span>
@@ -2984,7 +4225,20 @@ function CreateListing({
         {kind === "group" && (
           <div className="group-fields">
             <label><span>Участников для старта</span><input name="targetCount" type="number" min="2" defaultValue="10" required /></label>
-            <label><span>Срок набора</span><select name="collectionDays" defaultValue="7"><option value="3">3 дня</option><option value="7">7 дней</option><option value="14">14 дней</option></select></label>
+            <label>
+              <span>Срок набора, дней</span>
+              <input
+                name="collectionDays"
+                type="number"
+                min="1"
+                max="360"
+                step="1"
+                defaultValue="7"
+                inputMode="numeric"
+                required
+              />
+              <small>Укажите свой срок от 1 до 360 дней.</small>
+            </label>
           </div>
         )}
         <label className="checkbox-label"><input type="checkbox" required /><span>Подтверждаю достоверность объявления</span></label>
@@ -3186,6 +4440,17 @@ function ClubAdmin({
                 <small>{product.storeName} · Продавец: {product.sellerName || "Имя не указано"}{product.sellerUsername ? ` · @${product.sellerUsername}` : ""} · Telegram ID: {product.sellerTelegramId}</small>
               </p>
               <button
+                className="contact-action"
+                onClick={() =>
+                  openTelegramDialog(
+                    product.sellerTelegramId,
+                    product.sellerUsername,
+                  )
+                }
+              >
+                <MessageCircle size={14} /> Связаться
+              </button>
+              <button
                 onClick={async () => {
                   try {
                     await request(
@@ -3287,6 +4552,18 @@ function SellerFinanceAdminRow({
       <label><span>Лимит, ₽</span><input type="number" min="1" step="1" value={limit} onChange={(event) => setLimit(event.target.value)} required /></label>
       <div className="seller-finance-debt"><span>Текущий долг</span><b>{formatPrice(debt)}</b></div>
       <div className="seller-finance-actions">
+        <button
+          type="button"
+          className="contact-action"
+          onClick={() =>
+            openTelegramDialog(
+              sellerId,
+              seller.username ? String(seller.username) : undefined,
+            )
+          }
+        >
+          <MessageCircle size={14} /> Связаться
+        </button>
         <button type="submit" disabled={saving}>{saving ? "…" : "Сохранить"}</button>
         <button
           type="button"
@@ -3473,8 +4750,19 @@ function GroupBuyAdminCard({
             {buyers.map((buyer) => (
               <div key={buyer.telegramId}>
                 <span className="buyer-avatar">{buyer.name.slice(0, 2).toUpperCase()}</span>
-                <p><b>{buyer.name}</b><small>{buyer.phone || "Телефон не указан"}{buyer.username ? ` · @${buyer.username}` : ""}</small></p>
+                <p><b>{buyer.name}</b><small>{buyer.phone || "Телефон не указан"}{buyer.username ? ` · @${buyer.username}` : ""}{buyer.selectedColorName ? ` · Цвет: ${buyer.selectedColorName}` : ""}</small></p>
                 <em className={buyer.status === "PAID" ? "paid" : ""}>{buyer.status}</em>
+                <button
+                  type="button"
+                  className="contact-icon-button"
+                  onClick={() =>
+                    openTelegramDialog(buyer.telegramId, buyer.username)
+                  }
+                  aria-label={`Связаться с ${buyer.name}`}
+                  title="Связаться"
+                >
+                  <MessageCircle size={14} />
+                </button>
               </div>
             ))}
             {!buyers.length && <div className="empty-inline">Броней пока нет.</div>}
@@ -3651,7 +4939,18 @@ function SuperAdmin({
                     <div><b>{userName}</b><small>{user.username ? `@${String(user.username)}` : `Telegram ID: ${telegramId}`}</small><p>{asNumber(user.order_count)} заказов · {asNumber(user.store_count)} магазинов</p></div>
                     <div className="admin-user-actions">
                       <button
-                        className={superAdmin ? "super-admin-active" : ""}
+                        className="contact-action"
+                        onClick={() =>
+                          openTelegramDialog(
+                            telegramId,
+                            user.username ? String(user.username) : undefined,
+                          )
+                        }
+                      >
+                        <MessageCircle size={14} /> Связаться
+                      </button>
+                      <button
+                        className={`super-role-action ${superAdmin ? "super-admin-active" : ""}`}
                         disabled={superAdmin}
                         onClick={async () => {
                           try {
@@ -3709,8 +5008,22 @@ function SuperAdmin({
                 <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}{report.reported_username ? ` · @${String(report.reported_username)}` : ""}</b><small>Telegram ID: {String(report.reported_telegram_id)} · Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
                 <p>{String(report.reason)}</p>
                 <small>От: {String(report.reporter_name || report.reporter_telegram_id)}{report.reporter_username ? ` · @${String(report.reporter_username)}` : ""} · Telegram ID: {String(report.reporter_telegram_id)} · {formatMoscowDateTime(String(report.created_at))} МСК</small>
-                {pending && (
-                  <div className="report-review-actions">
+                <div className="report-review-actions">
+                  <button
+                    className="contact-action"
+                    onClick={() =>
+                      openTelegramDialog(
+                        asNumber(report.reported_telegram_id),
+                        report.reported_username
+                          ? String(report.reported_username)
+                          : undefined,
+                      )
+                    }
+                  >
+                    <MessageCircle size={15} /> Связаться
+                  </button>
+                  {pending && (
+                    <>
                     <button
                       className="ban-action"
                       onClick={async () => {
@@ -3738,8 +5051,9 @@ function SuperAdmin({
                     >
                       Отклонить
                     </button>
-                  </div>
-                )}
+                    </>
+                  )}
+                </div>
               </article>
             );
           })}

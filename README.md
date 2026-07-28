@@ -80,7 +80,7 @@ docker exec redline-bot ls -ld /data/uploads
 Супер-администратор может отправить боту команду `/clear` в личном чате.
 Бот покажет полный список удаляемых данных и кнопку подтверждения. После
 подтверждения удаляются магазины, объявления, заказы, покупки, групповые
-закупки, отзывы, жалобы, уведомления, комиссионные операции и загруженные
+закупки, обсуждения товаров, отзывы, жалобы, уведомления, комиссионные операции и загруженные
 изображения. Темы «Магазин» в клубах пересоздаются, поэтому опубликованные в
 них объявления также исчезают.
 
@@ -120,6 +120,7 @@ BEGIN IMMEDIATE;
 DELETE FROM reviews;
 DELETE FROM seller_reports;
 DELETE FROM notifications;
+DELETE FROM product_discussion_messages;
 DELETE FROM commission_ledger;
 DELETE FROM group_commission_ledger;
 DELETE FROM favorites;
@@ -139,7 +140,7 @@ DELETE FROM sqlite_sequence
 WHERE name IN (
   'reviews', 'seller_reports', 'notifications', 'commission_ledger',
   'group_commission_ledger', 'group_buy_reservations', 'group_buys',
-  'orders', 'products', 'stores'
+  'orders', 'products', 'stores', 'product_discussion_messages'
 );
 COMMIT;
 SQL

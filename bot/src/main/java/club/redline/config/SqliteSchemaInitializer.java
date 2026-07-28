@@ -98,6 +98,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("specifications")) {
             jdbc.execute("ALTER TABLE products ADD COLUMN specifications TEXT NOT NULL DEFAULT ''");
         }
+        if (!columns.contains("color_variants")) {
+            jdbc.execute("ALTER TABLE products ADD COLUMN color_variants TEXT NOT NULL DEFAULT '[]'");
+        }
     }
 
     private void ensureGroupColumns(JdbcTemplate jdbc) {
@@ -137,6 +140,19 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         }
         if (!orderColumns.contains("client_request_id")) {
             jdbc.execute("ALTER TABLE orders ADD COLUMN client_request_id TEXT");
+        }
+        if (!orderColumns.contains("selected_color_key")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN selected_color_key TEXT");
+        }
+        if (!orderColumns.contains("selected_color_name")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN selected_color_name TEXT");
+        }
+        Set<String> reservationColumns = columns(jdbc, "group_buy_reservations");
+        if (!reservationColumns.contains("selected_color_key")) {
+            jdbc.execute("ALTER TABLE group_buy_reservations ADD COLUMN selected_color_key TEXT");
+        }
+        if (!reservationColumns.contains("selected_color_name")) {
+            jdbc.execute("ALTER TABLE group_buy_reservations ADD COLUMN selected_color_name TEXT");
         }
         jdbc.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS orders_buyer_request_idx

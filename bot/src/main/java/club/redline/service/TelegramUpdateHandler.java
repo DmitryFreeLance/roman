@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TelegramUpdateHandler {
     private static final Pattern PRODUCT_START =
             Pattern.compile("^/start\\s+product_(\\d+)_(-?\\d+)$");
+    private static final Pattern DISCUSSION_START =
+            Pattern.compile("^/start\\s+discussion_(\\d+)_(-?\\d+)$");
     private static final Pattern CLEAR_COMMAND =
             Pattern.compile("^/clear(?:@\\w+)?$", Pattern.CASE_INSENSITIVE);
     private static final String CLEAR_CONFIRM = "clear_marketplace_confirm";
@@ -58,9 +60,18 @@ public class TelegramUpdateHandler {
                 return;
             }
             Matcher productStart = PRODUCT_START.matcher(text);
-            String query = productStart.matches()
-                    ? "product=" + productStart.group(1) + "&group=" + productStart.group(2)
-                    : "";
+            Matcher discussionStart = DISCUSSION_START.matcher(text);
+            String query;
+            if (discussionStart.matches()) {
+                query = "product=" + discussionStart.group(1)
+                        + "&group=" + discussionStart.group(2)
+                        + "&discussion=1";
+            } else if (productStart.matches()) {
+                query = "product=" + productStart.group(1)
+                        + "&group=" + productStart.group(2);
+            } else {
+                query = "";
+            }
             telegram.sendMiniAppButton(chatId, """
                     <b>REDLINE CLUB</b>
                     Маркетплейс вашего клуба: товары, магазины продавцов, групповые

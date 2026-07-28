@@ -40,6 +40,13 @@ class MarketplaceServiceSqliteTest {
             public void sendMessage(long chatId, String text) {
                 // Network calls are intentionally suppressed in this SQLite integration test.
             }
+
+            @Override
+            public void publishProduct(long groupId, int threadId, long productId,
+                                       String title, String description,
+                                       long priceKopecks, int stock, String imageUrl) {
+                // Product publication is covered separately from database behavior.
+            }
         };
         marketplace = new MarketplaceService(jdbc, telegram, properties);
     }
@@ -74,7 +81,17 @@ class MarketplaceServiceSqliteTest {
         ));
         long productId = marketplace.createProduct(sellerId, new MarketplaceService.NewProduct(
                 groupId, "Brake kit", "Track brake kit", "Комплект на одну ось", "Brakes",
-                10, 100_000L, "GROUP_BUY", "[]", 2, 7
+                10, 100_000L, "GROUP_BUY",
+                "[\"https://example.test/black-kit.jpg\",\"https://example.test/blue-kit.jpg\"]",
+                """
+                [
+                  {"key":"black","name":"Чёрный","hex":"#111111",
+                   "images":["https://example.test/black-kit.jpg"]},
+                  {"key":"blue","name":"Синий","hex":"#246bdb",
+                   "images":["https://example.test/blue-kit.jpg"]}
+                ]
+                """,
+                2, 7
         ));
         assertThat(marketplace.categories())
                 .anySatisfy(row -> assertThat(row.get("name")).isEqualTo("Brakes"));
@@ -91,15 +108,21 @@ class MarketplaceServiceSqliteTest {
         marketplace.updateStoreImage(
                 sellerId, storeId, "https://example.test/store-updated.jpg"
         );
+        marketplace.updateStoreProfile(
+                sellerId, storeId, "Garage Pro",
+                "https://example.test/store-profile.jpg"
+        );
         assertThat(marketplace.myStore(sellerId, -100123L).get("image_url"))
-                .isEqualTo("https://example.test/store-updated.jpg");
+                .isEqualTo("https://example.test/store-profile.jpg");
+        assertThat(marketplace.myStore(sellerId, -100123L).get("name"))
+                .isEqualTo("Garage Pro");
         Long groupBuyId = jdbc.queryForObject(
                 "SELECT id FROM group_buys WHERE product_id = ?", Long.class, productId
         );
 
-        assertThat(marketplace.reserve(groupBuyId, firstBuyerId, "+70000000001")
+        assertThat(marketplace.reserve(groupBuyId, firstBuyerId, "+70000000001", "black")
                 .thresholdReached()).isFalse();
-        assertThat(marketplace.reserve(groupBuyId, secondBuyerId, "+70000000002")
+        assertThat(marketplace.reserve(groupBuyId, secondBuyerId, "+70000000002", "blue")
                 .thresholdReached()).isTrue();
 
         marketplace.openPayment(groupBuyId, sellerId, 95_000L, 24);
@@ -111,6 +134,7 @@ class MarketplaceServiceSqliteTest {
                             .isEqualTo(103_075L);
                     assertThat(row.get("payment_details"))
                             .isEqualTo("+70000000000 / карта 0000");
+                    assertThat(row.get("selected_color_name")).isEqualTo("Чёрный");
                 });
         marketplace.markGroupBuyPaid(groupBuyId, firstBuyerId);
         marketplace.markGroupBuyPaid(groupBuyId, secondBuyerId);
@@ -129,7 +153,7 @@ class MarketplaceServiceSqliteTest {
                 sellerId,
                 new MarketplaceService.NewProduct(
                         groupId, "Brake fluid", "Racing fluid", "DOT 4, 1 л", "Brakes",
-                        3, 100_000L, "REGULAR", "[]", null, null
+                        3, 100_000L, "REGULAR", "[]", "[]", null, null
                 )
         );
         assertThat(marketplace.sellerProducts(sellerId, -100123L)).hasSize(2);
@@ -138,10 +162,10 @@ class MarketplaceServiceSqliteTest {
                 .containsExactly(regularProductId);
 
         long orderId = marketplace.createOrder(
-                firstBuyerId, regularProductId, 1, "order-first"
+                firstBuyerId, regularProductId, 1, "order-first", null
         );
         assertThat(marketplace.createOrder(
-                firstBuyerId, regularProductId, 1, "order-first"
+                firstBuyerId, regularProductId, 1, "order-first", null
         )).isEqualTo(orderId);
         assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L))
                 .singleElement()
@@ -190,14 +214,29 @@ class MarketplaceServiceSqliteTest {
                 });
         assertThat(marketplace.notifications(sellerId)).isNotEmpty();
 
-        long cancelledOrderId = marketplace.createOrder(
-                secondBuyerId, regularProductId, 2, "order-cancel"
+        var cartOrderIds = marketplace.createOrders(
+                secondBuyerId,
+                "cart-order",
+                java.util.List.of(
+                        new MarketplaceService.OrderItem(regularProductId, 1, null),
+                        new MarketplaceService.OrderItem(regularProductId, 1, null)
+                )
         );
+        assertThat(cartOrderIds).hasSize(2);
+        assertThat(marketplace.createOrders(
+                secondBuyerId,
+                "cart-order",
+                java.util.List.of(
+                        new MarketplaceService.OrderItem(regularProductId, 1, null),
+                        new MarketplaceService.OrderItem(regularProductId, 1, null)
+                )
+        )).containsExactlyElementsOf(cartOrderIds);
         assertThat(jdbc.queryForObject(
-                "SELECT quantity FROM orders WHERE id = ?",
-                Integer.class, cancelledOrderId
-        )).isEqualTo(2);
-        marketplace.advanceOrder(cancelledOrderId, secondBuyerId, "CANCELLED");
+                "SELECT stock FROM products WHERE id = ?", Integer.class, regularProductId
+        )).isZero();
+        cartOrderIds.forEach(id ->
+                marketplace.advanceOrder(id, secondBuyerId, "CANCELLED")
+        );
         assertThat(jdbc.queryForObject(
                 "SELECT stock FROM products WHERE id = ?", Integer.class, regularProductId
         )).isEqualTo(2);
@@ -207,12 +246,24 @@ class MarketplaceServiceSqliteTest {
                 regularProductId,
                 new MarketplaceService.UpdateProduct(
                         "Brake fluid Pro", "Updated fluid", "DOT 4, 1 л", "Track brakes",
-                        4, 120_000L, "[]"
+                        4, 120_000L,
+                        "[\"https://example.test/black.jpg\",\"https://example.test/blue.jpg\"]",
+                        """
+                        [
+                          {"key":"black","name":"Чёрный","hex":"#111111",
+                           "images":["https://example.test/black.jpg"]},
+                          {"key":"blue","name":"Синий","hex":"#246bdb",
+                           "images":["https://example.test/blue.jpg"]}
+                        ]
+                        """
                 )
         );
         assertThat(marketplace.sellerProducts(sellerId, -100123L))
-                .anySatisfy(row ->
-                        assertThat(row.get("title")).isEqualTo("Brake fluid Pro"));
+                .anySatisfy(row -> {
+                    assertThat(row.get("title")).isEqualTo("Brake fluid Pro");
+                    assertThat(String.valueOf(row.get("color_variants")))
+                            .contains("\"black\"", "\"blue\"");
+                });
         assertThat(marketplace.categories())
                 .anySatisfy(row -> assertThat(row.get("name")).isEqualTo("Track brakes"));
         assertThat(jdbc.queryForObject(
@@ -223,6 +274,30 @@ class MarketplaceServiceSqliteTest {
                 SELECT commission_debt_kopecks FROM seller_group_finance
                 WHERE group_id = ? AND seller_telegram_id = ?
                 """, Long.class, groupId, sellerId)).isEqualTo(10_150L);
+        assertThat(marketplace.sellerProfile(sellerId, -100123L))
+                .satisfies(profile -> {
+                    assertThat(profile.get("has_store")).isEqualTo(true);
+                    assertThat(((Number) profile.get("listing_count")).intValue())
+                            .isEqualTo(2);
+                    assertThat(((Number) profile.get("completed_sales")).intValue())
+                            .isEqualTo(1);
+                    assertThat(((Number) profile.get("sold_units")).intValue())
+                            .isEqualTo(1);
+                    assertThat(((Number) profile.get("rating")).doubleValue())
+                            .isEqualTo(5.0);
+                });
+
+        long discussionMessageId = marketplace.addProductDiscussionMessage(
+                regularProductId, firstBuyerId, "Подойдёт ли для зимы?"
+        );
+        assertThat(discussionMessageId).isPositive();
+        assertThat(marketplace.productDiscussion(regularProductId))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.get("body")).isEqualTo("Подойдёт ли для зимы?");
+                    assertThat(((Number) row.get("author_telegram_id")).longValue())
+                            .isEqualTo(firstBuyerId);
+                });
 
         marketplace.setSellerProductActive(sellerId, regularProductId, false);
         assertThat(marketplace.sellerProducts(sellerId, -100123L))
@@ -318,7 +393,7 @@ class MarketplaceServiceSqliteTest {
         MarketplaceService.ClearResult cleared = marketplace.clearMarketplaceData();
         assertThat(cleared.stores()).isEqualTo(1);
         assertThat(cleared.products()).isEqualTo(2);
-        assertThat(cleared.orders()).isEqualTo(2);
+        assertThat(cleared.orders()).isEqualTo(3);
         assertThat(cleared.groupBuys()).isEqualTo(1);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM telegram_groups", Integer.class
@@ -330,6 +405,9 @@ class MarketplaceServiceSqliteTest {
         assertThat(marketplace.catalog(-100123L)).isEmpty();
         assertThat(marketplace.purchaseOrders(firstBuyerId, -100123L)).isEmpty();
         assertThat(marketplace.notifications(firstBuyerId)).isEmpty();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM product_discussion_messages", Integer.class
+        )).isZero();
         assertThat(marketplace.categories())
                 .extracting(row -> String.valueOf(row.get("name")))
                 .contains("Колодки", "Масла и автохимия", "Тормоза")

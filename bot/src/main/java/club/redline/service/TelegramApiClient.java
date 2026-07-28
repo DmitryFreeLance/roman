@@ -78,7 +78,8 @@ public class TelegramApiClient {
                         <b>Полная очистка данных REDLINE</b>
 
                         Будут удалены магазины, объявления, групповые закупки,
-                        заказы, «Мои покупки», отзывы, жалобы, уведомления,
+                        заказы, «Мои покупки», обсуждения товаров, отзывы,
+                        жалобы, уведомления,
                         комиссионные операции и загруженные фотографии.
 
                         Клубы, пользователи, супер-администраторы и базовые
@@ -149,7 +150,8 @@ public class TelegramApiClient {
                 В наличии: <b>%d шт.</b>
 
                 В карточке товара доступны сведения о продавце, рейтинг,
-                условия покупки или бронирования и итоговые действия по сделке.
+                доступные цвета, обсуждение, условия покупки или бронирования
+                и итоговые действия по сделке.
                 """.formatted(
                 escapeHtml(title),
                 productId,
@@ -165,10 +167,16 @@ public class TelegramApiClient {
                 "caption", caption,
                 "parse_mode", "HTML",
                 "reply_markup", Map.of(
-                        "inline_keyboard", List.of(List.of(Map.of(
-                                "text", "Открыть товар",
-                                "url", productStartLink(productId, groupId)
-                        )))
+                        "inline_keyboard", List.of(List.of(
+                                Map.of(
+                                        "text", "Открыть товар",
+                                        "url", productStartLink(productId, groupId, false)
+                                ),
+                                Map.of(
+                                        "text", "Обсудить",
+                                        "url", productStartLink(productId, groupId, true)
+                                )
+                        ))
                 )
         ));
     }
@@ -185,13 +193,16 @@ public class TelegramApiClient {
         return value.substring(0, Math.max(0, maxLength - 1)).stripTrailing() + "…";
     }
 
-    private String productStartLink(long productId, long groupId) {
+    private String productStartLink(long productId, long groupId,
+                                    boolean discussion) {
         String username = botUsername;
         if (username == null || username.isBlank()) {
             username = call("getMe", Map.of()).path("username").asText();
             botUsername = username;
         }
-        return "https://t.me/" + username + "?start=product_" + productId + "_" + groupId;
+        String payload = discussion ? "discussion_" : "product_";
+        return "https://t.me/" + username + "?start="
+                + payload + productId + "_" + groupId;
     }
 
     public List<JsonNode> getUpdates(long offset) {

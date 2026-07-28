@@ -99,6 +99,22 @@ class TelegramUpdateHandlerTest {
     }
 
     @Test
+    void opensProductDiscussionFromTelegramGroupButton() throws Exception {
+        handler.handle(update("""
+                {
+                  "message": {
+                    "text": "/start discussion_42_-100123",
+                    "from": {"id": 2},
+                    "chat": {"id": 2, "type": "private"}
+                  }
+                }
+                """));
+
+        assertThat(telegram.miniAppQuery)
+                .isEqualTo("product=42&group=-100123&discussion=1");
+    }
+
+    @Test
     void clearsMarketplaceAfterExplicitConfirmation() throws Exception {
         marketplace.registerGroup(-100123L, "Test club", 1L, 7);
 
@@ -131,6 +147,7 @@ class TelegramUpdateHandlerTest {
     private static class RecordingTelegram extends TelegramApiClient {
         private Long clearConfirmationChatId;
         private String removedKeyboard;
+        private String miniAppQuery;
         private final List<String> messages = new ArrayList<>();
         private final List<String> deletedTopics = new ArrayList<>();
 
@@ -146,6 +163,11 @@ class TelegramUpdateHandlerTest {
         @Override
         public void sendMessage(long chatId, String text) {
             messages.add(text);
+        }
+
+        @Override
+        public void sendMiniAppButton(long chatId, String text, String query) {
+            miniAppQuery = query;
         }
 
         @Override

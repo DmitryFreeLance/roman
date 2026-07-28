@@ -12,6 +12,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
@@ -127,7 +128,8 @@ public class MarketplaceController {
                 request.groupId(), request.title(), request.description(),
                 request.specifications(), request.category(),
                 request.stock(), request.sellerPriceKopecks(), request.kind(),
-                request.imageUrlsJson(), request.targetCount(), request.collectionDays()
+                request.imageUrlsJson(), request.colorVariantsJson(),
+                request.targetCount(), request.collectionDays()
         ));
         return Map.of("id", id);
     }
@@ -163,7 +165,7 @@ public class MarketplaceController {
                         request.title(), request.description(), request.specifications(),
                         request.category(),
                         request.stock(), request.sellerPriceKopecks(),
-                        request.imageUrlsJson()
+                        request.imageUrlsJson(), request.colorVariantsJson()
                 ));
     }
 
@@ -180,6 +182,15 @@ public class MarketplaceController {
             @RequestHeader("X-Telegram-Init-Data") String initData,
             @PathVariable long telegramGroupId) {
         return marketplace.myStore(registered(initData).id(), telegramGroupId);
+    }
+
+    @GetMapping("/me/seller-profile/{telegramGroupId}")
+    public Map<String, Object> sellerProfile(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId) {
+        return marketplace.sellerProfile(
+                registered(initData).id(), telegramGroupId
+        );
     }
 
     @PostMapping("/stores")
@@ -205,12 +216,26 @@ public class MarketplaceController {
         );
     }
 
+    @PutMapping("/stores/{storeId}/profile")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateStoreProfile(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long storeId,
+            @Valid @RequestBody StoreProfileRequest request) {
+        marketplace.updateStoreProfile(
+                registered(initData).id(), storeId,
+                request.name(), request.imageUrl()
+        );
+    }
+
     @PostMapping("/group-buys/{id}/reservations")
     public ReservationResult reserve(@RequestHeader("X-Telegram-Init-Data") String initData,
                                      @PathVariable long id,
                                      @RequestBody ReserveRequest request) {
         TelegramUser user = registered(initData);
-        return marketplace.reserve(id, user.id(), request.phone());
+        return marketplace.reserve(
+                id, user.id(), request.phone(), request.selectedColorKey()
+        );
     }
 
     @PostMapping("/group-buys/{id}/open-payment")
@@ -258,7 +283,41 @@ public class MarketplaceController {
                                          @Valid @RequestBody CreateOrderRequest request) {
         return Map.of("id", marketplace.createOrder(
                 registered(initData).id(), productId,
-                request.quantity(), request.requestId()
+                request.quantity(), request.requestId(), request.selectedColorKey()
+        ));
+    }
+
+    @PostMapping("/orders/batch")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> createOrders(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @Valid @RequestBody CreateOrdersRequest request) {
+        List<MarketplaceService.OrderItem> items = request.items().stream()
+                .map(item -> new MarketplaceService.OrderItem(
+                        item.productId(), item.quantity(), item.selectedColorKey()
+                ))
+                .toList();
+        return Map.of("ids", marketplace.createOrders(
+                registered(initData).id(), request.requestId(), items
+        ));
+    }
+
+    @GetMapping("/products/{productId}/discussion")
+    public List<Map<String, Object>> productDiscussion(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId) {
+        registered(initData);
+        return marketplace.productDiscussion(productId);
+    }
+
+    @PostMapping("/products/{productId}/discussion")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Long> addProductDiscussionMessage(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long productId,
+            @Valid @RequestBody DiscussionMessageRequest request) {
+        return Map.of("id", marketplace.addProductDiscussionMessage(
+                productId, registered(initData).id(), request.body()
         ));
     }
 
@@ -585,8 +644,9 @@ public class MarketplaceController {
             @Positive long sellerPriceKopecks,
             @NotBlank String kind,
             @NotBlank String imageUrlsJson,
+            @NotBlank String colorVariantsJson,
             @Min(2) Integer targetCount,
-            @Min(1) @Max(60) Integer collectionDays
+            @Min(1) @Max(360) Integer collectionDays
     ) {}
     public record CreateStoreRequest(
             long groupId,
@@ -596,6 +656,10 @@ public class MarketplaceController {
             @NotBlank String paymentDetails
     ) {}
     public record StoreImageRequest(@NotBlank String imageUrl) {}
+    public record StoreProfileRequest(
+            @NotBlank @Size(max = 100) String name,
+            @NotBlank String imageUrl
+    ) {}
     public record UpdateProductRequest(
             @NotBlank String title,
             @NotBlank String description,
@@ -603,12 +667,27 @@ public class MarketplaceController {
             @NotBlank @Size(max = 80) String category,
             @Positive int stock,
             @Positive long sellerPriceKopecks,
-            @NotBlank String imageUrlsJson
+            @NotBlank String imageUrlsJson,
+            @NotBlank String colorVariantsJson
     ) {}
     public record ProductActiveRequest(boolean active) {}
     public record CreateOrderRequest(@Min(1) @Max(99) int quantity,
-                                     @NotBlank @Size(max = 100) String requestId) {}
-    public record ReserveRequest(String phone) {}
+                                     @NotBlank @Size(max = 100) String requestId,
+                                     String selectedColorKey) {}
+    public record CreateOrdersRequest(
+            @NotBlank @Size(max = 80) String requestId,
+            @NotNull @Size(min = 1, max = 30)
+            List<@Valid CreateOrderItemRequest> items
+    ) {}
+    public record CreateOrderItemRequest(
+            @Positive long productId,
+            @Min(1) @Max(99) int quantity,
+            String selectedColorKey
+    ) {}
+    public record ReserveRequest(String phone, String selectedColorKey) {}
+    public record DiscussionMessageRequest(
+            @NotBlank @Size(max = 2000) String body
+    ) {}
     public record FavoriteRequest(boolean favorite) {}
     public record ReviewRequest(@Min(1) @Max(5) int rating) {}
     public record SellerReportRequest(@NotBlank String reason) {}

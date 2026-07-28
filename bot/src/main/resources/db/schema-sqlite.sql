@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS products (
   kind TEXT NOT NULL DEFAULT 'REGULAR'
     CHECK (kind IN ('REGULAR', 'GROUP_BUY')),
   image_urls TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(image_urls)),
+  color_variants TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(color_variants)),
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -154,6 +155,8 @@ CREATE TABLE IF NOT EXISTS group_buy_reservations (
   group_buy_id INTEGER NOT NULL REFERENCES group_buys(id),
   buyer_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
   contact_phone TEXT,
+  selected_color_key TEXT,
+  selected_color_name TEXT,
   status TEXT NOT NULL DEFAULT 'RESERVED'
     CHECK (status IN ('RESERVED', 'PAYMENT_REQUESTED', 'PAID', 'CANCELLED', 'COMPLETED')),
   paid_at TEXT,
@@ -177,6 +180,8 @@ CREATE TABLE IF NOT EXISTS orders (
   group_commission_kopecks INTEGER NOT NULL DEFAULT 0,
   quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
   client_request_id TEXT,
+  selected_color_key TEXT,
+  selected_color_name TEXT,
   status TEXT NOT NULL DEFAULT 'AWAITING_PAYMENT'
     CHECK (status IN ('AWAITING_PAYMENT', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +207,17 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS notifications_user_idx
   ON notifications(user_telegram_id, is_read, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS product_discussion_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  author_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 2000),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS product_discussion_messages_product_idx
+  ON product_discussion_messages(product_id, id);
 
 CREATE TABLE IF NOT EXISTS seller_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

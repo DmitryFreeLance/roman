@@ -2,6 +2,9 @@ package club.redline.service;
 
 import club.redline.config.RedlineProperties;
 import club.redline.security.TelegramInitDataVerifier.TelegramUser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,13 +15,17 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class MarketplaceService {
     private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
     private static final DateTimeFormatter TELEGRAM_TIME =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'МСК'", Locale.forLanguageTag("ru"))
                     .withZone(ZoneId.of("Europe/Moscow"));
@@ -79,7 +86,8 @@ public class MarketplaceService {
                          (1 + s.bot_commission_percent / 100
                           + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
-                       p.image_urls, st.id AS store_id, st.name AS store_name,
+                       p.image_urls, p.color_variants,
+                       st.id AS store_id, st.name AS store_name,
                        st.image_url AS store_image_url,
                        st.seller_telegram_id, s.username AS seller_username,
                        COALESCE(NULLIF(s.display_name, ''),
@@ -135,7 +143,8 @@ public class MarketplaceService {
                          (1 + u.bot_commission_percent / 100
                           + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
-                       p.image_urls, p.active, st.id AS store_id, st.name AS store_name,
+                       p.image_urls, p.color_variants, p.active,
+                       st.id AS store_id, st.name AS store_name,
                        st.image_url AS store_image_url,
                        st.seller_telegram_id,
                        COALESCE(AVG(r.rating), 0) AS rating,
@@ -189,10 +198,11 @@ public class MarketplaceService {
     public void updateSellerProduct(long sellerTelegramId, long productId,
                                     UpdateProduct input) {
         String category = ensureCategory(input.category());
+        String colorVariants = normalizeColorVariants(input.colorVariantsJson());
         int updated = jdbc.update("""
                 UPDATE products
                 SET title = ?, description = ?, specifications = ?, category = ?, stock = ?,
-                    seller_price_kopecks = ?, image_urls = ?,
+                    seller_price_kopecks = ?, image_urls = ?, color_variants = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND deleted = 0 AND store_id IN (
                   SELECT id FROM stores WHERE seller_telegram_id = ?
@@ -200,7 +210,7 @@ public class MarketplaceService {
                 """, input.title(), input.description(),
                 input.specifications() == null ? "" : input.specifications(),
                 category, input.stock(), input.sellerPriceKopecks(), input.imageUrlsJson(),
-                productId, sellerTelegramId);
+                colorVariants, productId, sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Product not found or access denied");
         }
@@ -224,20 +234,21 @@ public class MarketplaceService {
     public long createProduct(long sellerTelegramId, NewProduct input) {
         assertSellerCanTrade(sellerTelegramId, input.groupId());
         String category = ensureCategory(input.category());
+        String colorVariants = normalizeColorVariants(input.colorVariantsJson());
         Long storeId = jdbc.queryForObject("""
                 SELECT id FROM stores WHERE seller_telegram_id = ? AND group_id = ?
                 """, Long.class, sellerTelegramId, input.groupId());
         Long productId = jdbc.queryForObject("""
                 INSERT INTO products
                   (store_id, group_id, title, description, specifications, category, stock,
-                   seller_price_kopecks, kind, image_urls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   seller_price_kopecks, kind, image_urls, color_variants)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """, Long.class, storeId, input.groupId(), input.title(), input.description(),
                 input.specifications() == null ? "" : input.specifications(),
                 category, input.stock(),
                 input.sellerPriceKopecks(), input.kind(),
-                input.imageUrlsJson());
+                input.imageUrlsJson(), colorVariants);
         if ("GROUP_BUY".equals(input.kind())) {
             jdbc.update("""
                     INSERT INTO group_buys (product_id, target_count, collection_deadline)
@@ -287,6 +298,75 @@ public class MarketplaceService {
                 WHERE st.seller_telegram_id = ? AND g.telegram_group_id = ?
                   AND st.active = 1
                 """, sellerTelegramId, telegramGroupId);
+    }
+
+    public Map<String, Object> sellerProfile(long sellerTelegramId,
+                                             long telegramGroupId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT st.id AS store_id, st.name AS store_name,
+                       st.description AS store_description,
+                       st.image_url AS store_image_url,
+                       (SELECT COUNT(*) FROM products p
+                        WHERE p.store_id = st.id AND p.deleted = 0)
+                         AS listing_count,
+                       (SELECT COUNT(*) FROM products p
+                        WHERE p.store_id = st.id
+                          AND p.deleted = 0 AND p.active = 1)
+                         AS active_listing_count,
+                       (SELECT COUNT(*) FROM orders o
+                        JOIN products p ON p.id = o.product_id
+                        WHERE p.store_id = st.id AND o.status = 'COMPLETED')
+                         AS completed_sales,
+                       (SELECT COALESCE(SUM(o.quantity), 0) FROM orders o
+                        JOIN products p ON p.id = o.product_id
+                        WHERE p.store_id = st.id AND o.status = 'COMPLETED')
+                         AS sold_units,
+                       (SELECT COALESCE(SUM(o.seller_price_kopecks), 0)
+                        FROM orders o
+                        JOIN products p ON p.id = o.product_id
+                        WHERE p.store_id = st.id AND o.status = 'COMPLETED')
+                         AS sales_kopecks,
+                       (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r
+                        JOIN products p ON p.id = r.product_id
+                        WHERE p.store_id = st.id) AS rating,
+                       (SELECT COUNT(*) FROM reviews r
+                        JOIN products p ON p.id = r.product_id
+                        WHERE p.store_id = st.id) AS review_count
+                FROM stores st
+                JOIN telegram_groups g ON g.id = st.group_id
+                WHERE st.seller_telegram_id = ?
+                  AND g.telegram_group_id = ?
+                  AND st.active = 1
+                """, sellerTelegramId, telegramGroupId);
+        if (rows.isEmpty()) {
+            return Map.of("has_store", false);
+        }
+        Map<String, Object> result = new java.util.LinkedHashMap<>(rows.getFirst());
+        result.put("has_store", true);
+        return result;
+    }
+
+    @Transactional
+    public void updateStoreProfile(long sellerTelegramId, long storeId,
+                                   String name, String imageUrl) {
+        String normalizedName = name == null ? "" : name.strip();
+        String normalizedImageUrl = imageUrl == null ? "" : imageUrl.strip();
+        if (normalizedName.isEmpty() || normalizedName.length() > 100) {
+            throw new IllegalArgumentException(
+                    "Название магазина должно содержать от 1 до 100 символов"
+            );
+        }
+        if (normalizedImageUrl.isEmpty()) {
+            throw new IllegalArgumentException("Добавьте фотографию магазина");
+        }
+        int updated = jdbc.update("""
+                UPDATE stores
+                SET name = ?, image_url = ?
+                WHERE id = ? AND seller_telegram_id = ? AND active = 1
+                """, normalizedName, normalizedImageUrl, storeId, sellerTelegramId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Магазин не найден");
+        }
     }
 
     @Transactional
@@ -473,11 +553,82 @@ public class MarketplaceService {
         return created;
     }
 
+    private String normalizeColorVariants(String value) {
+        String json = value == null || value.isBlank() ? "[]" : value;
+        try {
+            JsonNode variants = JSON.readTree(json);
+            if (!variants.isArray()) {
+                throw new IllegalArgumentException("Некорректный список цветов");
+            }
+            if (variants.isEmpty()) return "[]";
+            if (variants.size() < 2 || variants.size() > 16) {
+                throw new IllegalArgumentException("Выберите от 2 до 16 цветов");
+            }
+            Set<String> keys = new HashSet<>();
+            for (JsonNode variant : variants) {
+                String key = variant.path("key").asText("").strip();
+                String name = variant.path("name").asText("").strip();
+                String hex = variant.path("hex").asText("").strip();
+                JsonNode images = variant.path("images");
+                if (!key.matches("[a-z0-9-]{1,32}") || !keys.add(key)) {
+                    throw new IllegalArgumentException("Некорректный или повторяющийся цвет");
+                }
+                if (name.isBlank() || name.length() > 40
+                        || !hex.matches("#[0-9a-fA-F]{6}")) {
+                    throw new IllegalArgumentException("Некорректное название цвета");
+                }
+                if (!images.isArray() || images.isEmpty() || images.size() > 6) {
+                    throw new IllegalArgumentException(
+                            "Для каждого цвета загрузите от 1 до 6 фотографий"
+                    );
+                }
+                for (JsonNode image : images) {
+                    if (!image.isTextual() || image.asText().isBlank()) {
+                        throw new IllegalArgumentException(
+                                "Для каждого цвета обязательны фотографии"
+                        );
+                    }
+                }
+            }
+            return JSON.writeValueAsString(variants);
+        } catch (JsonProcessingException error) {
+            throw new IllegalArgumentException("Некорректный список цветов");
+        }
+    }
+
+    private ProductColor selectedColor(Object variantsValue, String selectedKey) {
+        try {
+            JsonNode variants = JSON.readTree(
+                    variantsValue == null ? "[]" : String.valueOf(variantsValue)
+            );
+            if (!variants.isArray() || variants.isEmpty()) {
+                if (selectedKey != null && !selectedKey.isBlank()) {
+                    throw new IllegalArgumentException("У этого товара нет выбора цвета");
+                }
+                return null;
+            }
+            String normalizedKey = selectedKey == null ? "" : selectedKey.strip();
+            for (JsonNode variant : variants) {
+                if (variant.path("key").asText().equals(normalizedKey)) {
+                    return new ProductColor(
+                            normalizedKey,
+                            variant.path("name").asText()
+                    );
+                }
+            }
+            throw new IllegalArgumentException("Выберите доступный цвет товара");
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Не удалось прочитать цвета товара");
+        }
+    }
+
     @Transactional
-    public ReservationResult reserve(long groupBuyId, long buyerTelegramId, String phone) {
+    public ReservationResult reserve(long groupBuyId, long buyerTelegramId, String phone,
+                                     String selectedColorKey) {
         Map<String, Object> groupBuy = jdbc.queryForMap("""
                 SELECT gb.target_count, gb.status, p.stock, p.group_id,
-                       p.active, p.deleted, st.seller_telegram_id
+                       p.active, p.deleted, p.color_variants,
+                       st.seller_telegram_id
                 FROM group_buys gb
                 JOIN products p ON p.id = gb.product_id
                 JOIN stores st ON st.id = p.store_id
@@ -493,11 +644,18 @@ public class MarketplaceService {
                 ((Number) groupBuy.get("seller_telegram_id")).longValue(),
                 ((Number) groupBuy.get("group_id")).longValue()
         );
+        ProductColor selectedColor = selectedColor(
+                groupBuy.get("color_variants"), selectedColorKey
+        );
         int inserted = jdbc.update("""
-                INSERT INTO group_buy_reservations (group_buy_id, buyer_telegram_id, contact_phone)
-                VALUES (?, ?, ?)
+                INSERT INTO group_buy_reservations
+                  (group_buy_id, buyer_telegram_id, contact_phone,
+                   selected_color_key, selected_color_name)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (group_buy_id, buyer_telegram_id) DO NOTHING
-                """, groupBuyId, buyerTelegramId, phone);
+                """, groupBuyId, buyerTelegramId, phone,
+                selectedColor == null ? null : selectedColor.key(),
+                selectedColor == null ? null : selectedColor.name());
         Integer reserved = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM group_buy_reservations
                 WHERE group_buy_id = ? AND status <> 'CANCELLED'
@@ -728,8 +886,35 @@ public class MarketplaceService {
     }
 
     @Transactional
+    public List<Long> createOrders(long buyerTelegramId, String clientRequestId,
+                                   List<OrderItem> items) {
+        if (clientRequestId == null || clientRequestId.isBlank()
+                || clientRequestId.length() > 80) {
+            throw new IllegalArgumentException("Некорректный идентификатор операции");
+        }
+        if (items == null || items.isEmpty() || items.size() > 30) {
+            throw new IllegalArgumentException("В корзине должно быть от 1 до 30 позиций");
+        }
+        List<Long> orderIds = new ArrayList<>(items.size());
+        for (int index = 0; index < items.size(); index++) {
+            OrderItem item = items.get(index);
+            if (item == null || item.productId() <= 0) {
+                throw new IllegalArgumentException("Некорректная позиция корзины");
+            }
+            orderIds.add(createOrder(
+                    buyerTelegramId,
+                    item.productId(),
+                    item.quantity(),
+                    clientRequestId + ":" + index,
+                    item.selectedColorKey()
+            ));
+        }
+        return List.copyOf(orderIds);
+    }
+
+    @Transactional
     public long createOrder(long buyerTelegramId, long productId, int quantity,
-                            String clientRequestId) {
+                            String clientRequestId, String selectedColorKey) {
         if (quantity < 1 || quantity > 99) {
             throw new IllegalArgumentException("Количество должно быть от 1 до 99");
         }
@@ -745,7 +930,8 @@ public class MarketplaceService {
 
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.id, p.stock, p.seller_price_kopecks, p.group_id,
-                       p.active, p.deleted, st.seller_telegram_id, u.bot_commission_percent,
+                       p.active, p.deleted, p.color_variants,
+                       st.seller_telegram_id, u.bot_commission_percent,
                        COALESCE(sgf.commission_percent, g.commission_percent)
                          AS commission_percent
                 FROM products p
@@ -766,6 +952,9 @@ public class MarketplaceService {
             throw new IllegalStateException("You cannot buy your own product");
         }
         assertSellerCanTrade(sellerId, groupId);
+        ProductColor selectedColor = selectedColor(
+                product.get("color_variants"), selectedColorKey
+        );
         int stock = ((Number) product.get("stock")).intValue();
         if (stock < quantity) {
             throw new IllegalStateException("Недостаточно товара: доступно " + stock);
@@ -783,13 +972,15 @@ public class MarketplaceService {
                   (product_id, buyer_telegram_id, seller_telegram_id, group_id,
                    seller_price_kopecks, buyer_price_kopecks, commission_kopecks,
                    platform_commission_kopecks, group_commission_kopecks,
-                   quantity, client_request_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   quantity, client_request_id, selected_color_key, selected_color_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """, Long.class, productId, buyerTelegramId, sellerId, groupId,
                 sellerPrice, buyerPrice, commission, platformCommission, groupCommission,
-                quantity, clientRequestId);
+                quantity, clientRequestId,
+                selectedColor == null ? null : selectedColor.key(),
+                selectedColor == null ? null : selectedColor.name());
         if (insertedOrderIds.isEmpty()) {
             return jdbc.queryForObject("""
                     SELECT id FROM orders
@@ -833,8 +1024,14 @@ public class MarketplaceService {
                                                      long telegramGroupId) {
         return jdbc.queryForList("""
                 SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
-                       o.commission_kopecks, o.quantity, o.created_at, o.updated_at,
+                       o.commission_kopecks, o.quantity,
+                       o.selected_color_key, o.selected_color_name,
+                       o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
+                       (SELECT json_extract(color.value, '$.images')
+                        FROM json_each(p.color_variants) color
+                        WHERE json_extract(color.value, '$.key') = o.selected_color_key
+                        LIMIT 1) AS selected_color_images,
                        review.rating AS review_rating,
                        st.id AS store_id, st.name AS store_name,
                        COALESCE(
@@ -907,14 +1104,20 @@ public class MarketplaceService {
                        gb.target_count, gb.final_price_kopecks,
                        gb.payment_deadline, gb.delivery_from, gb.delivery_to,
                        gb.delivery_note,
-                       r.status AS reservation_status, r.created_at,
+                       r.status AS reservation_status,
+                       r.selected_color_key, r.selected_color_name, r.created_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
+                       (SELECT json_extract(color.value, '$.images')
+                        FROM json_each(p.color_variants) color
+                        WHERE json_extract(color.value, '$.key') = r.selected_color_key
+                        LIMIT 1) AS selected_color_images,
                        st.id AS store_id, st.name AS store_name,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
                          NULLIF(st.payment_phone, '')
                        ) AS payment_details,
+                       seller.telegram_id AS seller_telegram_id,
                        seller.username AS seller_username,
                        COALESCE(NULLIF(seller.display_name, ''),
                          TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
@@ -944,8 +1147,14 @@ public class MarketplaceService {
                                                   long telegramGroupId) {
         return jdbc.queryForList("""
                 SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
-                       o.commission_kopecks, o.quantity, o.created_at, o.updated_at,
+                       o.commission_kopecks, o.quantity,
+                       o.selected_color_key, o.selected_color_name,
+                       o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
+                       (SELECT json_extract(color.value, '$.images')
+                        FROM json_each(p.color_variants) color
+                        WHERE json_extract(color.value, '$.key') = o.selected_color_key
+                        LIMIT 1) AS selected_color_images,
                        st.id AS store_id, st.name AS store_name,
                        buyer.telegram_id AS buyer_telegram_id,
                        buyer.username AS buyer_username, buyer.phone AS buyer_phone,
@@ -960,6 +1169,62 @@ public class MarketplaceService {
                 WHERE o.seller_telegram_id = ? AND g.telegram_group_id = ?
                 ORDER BY o.created_at DESC
                 """, sellerTelegramId, telegramGroupId);
+    }
+
+    public List<Map<String, Object>> productDiscussion(long productId) {
+        requireDiscussionProduct(productId);
+        return jdbc.queryForList("""
+                SELECT messages.id, messages.product_id,
+                       messages.author_telegram_id, messages.body,
+                       messages.created_at,
+                       author.username AS author_username,
+                       COALESCE(NULLIF(author.display_name, ''),
+                         TRIM(author.first_name || ' ' || COALESCE(author.last_name, '')))
+                         AS author_name
+                FROM (
+                  SELECT id, product_id, author_telegram_id, body, created_at
+                  FROM product_discussion_messages
+                  WHERE product_id = ?
+                  ORDER BY id DESC
+                  LIMIT 200
+                ) messages
+                JOIN users author ON author.telegram_id = messages.author_telegram_id
+                ORDER BY messages.id
+                """, productId);
+    }
+
+    @Transactional
+    public long addProductDiscussionMessage(long productId, long authorTelegramId,
+                                            String body) {
+        requireDiscussionProduct(productId);
+        String normalized = body == null ? "" : body.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("Напишите сообщение");
+        }
+        if (normalized.length() > 2000) {
+            throw new IllegalArgumentException(
+                    "Сообщение не должно превышать 2000 символов"
+            );
+        }
+        Long id = jdbc.queryForObject("""
+                INSERT INTO product_discussion_messages
+                  (product_id, author_telegram_id, body)
+                VALUES (?, ?, ?)
+                RETURNING id
+                """, Long.class, productId, authorTelegramId, normalized);
+        if (id == null) {
+            throw new IllegalStateException("Не удалось отправить сообщение");
+        }
+        return id;
+    }
+
+    private void requireDiscussionProduct(long productId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM products WHERE id = ? AND deleted = 0
+                """, Integer.class, productId);
+        if (count == null || count == 0) {
+            throw new IllegalArgumentException("Товар не найден");
+        }
     }
 
     public List<Map<String, Object>> notifications(long telegramId) {
@@ -1153,7 +1418,8 @@ public class MarketplaceService {
         assertGroupBuySeller(groupBuyId, sellerTelegramId);
         return jdbc.queryForList("""
                 SELECT u.telegram_id, u.username, u.first_name, u.last_name,
-                       r.contact_phone, r.status, r.paid_at
+                       r.contact_phone, r.selected_color_key, r.selected_color_name,
+                       r.status, r.paid_at
                 FROM group_buy_reservations r
                 JOIN users u ON u.telegram_id = r.buyer_telegram_id
                 WHERE r.group_buy_id = ?
@@ -1495,6 +1761,7 @@ public class MarketplaceService {
         jdbc.update("DELETE FROM reviews");
         jdbc.update("DELETE FROM seller_reports");
         jdbc.update("DELETE FROM notifications");
+        jdbc.update("DELETE FROM product_discussion_messages");
         jdbc.update("DELETE FROM commission_ledger");
         jdbc.update("DELETE FROM group_commission_ledger");
         jdbc.update("DELETE FROM favorites");
@@ -1530,7 +1797,8 @@ public class MarketplaceService {
                 WHERE name IN (
                   'stores', 'products', 'group_buys', 'group_buy_reservations',
                   'orders', 'notifications', 'seller_reports', 'reviews',
-                  'commission_ledger', 'group_commission_ledger'
+                  'commission_ledger', 'group_commission_ledger',
+                  'product_discussion_messages'
                 )
                 """);
         return new ClearResult(stores, products, orders, groupBuys);
@@ -2126,6 +2394,7 @@ public class MarketplaceService {
         return jdbc.queryForMap("""
                 SELECT o.id, o.status, o.quantity, o.buyer_price_kopecks,
                        o.seller_price_kopecks, o.commission_kopecks,
+                       o.selected_color_key, o.selected_color_name,
                        p.title AS product_title, st.name AS store_name,
                        buyer.telegram_id AS buyer_telegram_id,
                        buyer.username AS buyer_username,
@@ -2147,7 +2416,7 @@ public class MarketplaceService {
     }
 
     private String orderSummary(Map<String, Object> order) {
-        return """
+        StringBuilder summary = new StringBuilder("""
                 Заказ: <b>#%s</b>
                 Товар: <b>%s</b>
                 Количество: <b>%s шт.</b>
@@ -2163,7 +2432,14 @@ public class MarketplaceService {
                 formatMoney(order.get("buyer_price_kopecks")),
                 userLabel(order, "buyer"),
                 userLabel(order, "seller")
-        ).strip();
+        ).strip());
+        if (order.get("selected_color_name") != null
+                && !String.valueOf(order.get("selected_color_name")).isBlank()) {
+            summary.append("\nЦвет: <b>")
+                    .append(escapeHtml(order.get("selected_color_name")))
+                    .append("</b>");
+        }
+        return summary.toString();
     }
 
     private Map<String, Object> groupBuyNotificationDetails(long groupBuyId) {
@@ -2315,14 +2591,17 @@ public class MarketplaceService {
     public record NewProduct(long groupId, String title, String description,
                              String specifications, String category,
                              int stock, long sellerPriceKopecks, String kind,
-                             String imageUrlsJson, Integer targetCount, Integer collectionDays) {}
+                             String imageUrlsJson, String colorVariantsJson,
+                             Integer targetCount, Integer collectionDays) {}
     public record UpdateProduct(String title, String description, String specifications,
                                 String category,
                                 int stock, long sellerPriceKopecks,
-                                String imageUrlsJson) {}
+                                String imageUrlsJson, String colorVariantsJson) {}
     public record NewStore(long groupId, String name, String description,
                            String imageUrl, String paymentDetails) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
+    public record OrderItem(long productId, int quantity, String selectedColorKey) {}
     public record ClubTopic(long telegramGroupId, int threadId) {}
     public record ClearResult(int stores, int products, int orders, int groupBuys) {}
+    private record ProductColor(String key, String name) {}
 }
