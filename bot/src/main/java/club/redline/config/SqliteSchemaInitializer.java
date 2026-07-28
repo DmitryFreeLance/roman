@@ -73,6 +73,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
 
     private void ensureStoreColumns(JdbcTemplate jdbc) {
         Set<String> columns = columns(jdbc, "stores");
+        if (!columns.contains("image_url")) {
+            jdbc.execute("ALTER TABLE stores ADD COLUMN image_url TEXT");
+        }
         if (!columns.contains("payment_details")) {
             jdbc.execute("ALTER TABLE stores ADD COLUMN payment_details TEXT");
         }
@@ -91,6 +94,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         Set<String> columns = columns(jdbc, "products");
         if (!columns.contains("deleted")) {
             jdbc.execute("ALTER TABLE products ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!columns.contains("specifications")) {
+            jdbc.execute("ALTER TABLE products ADD COLUMN specifications TEXT NOT NULL DEFAULT ''");
         }
     }
 
@@ -126,6 +132,17 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!orderColumns.contains("group_commission_kopecks")) {
             jdbc.execute("ALTER TABLE orders ADD COLUMN group_commission_kopecks INTEGER NOT NULL DEFAULT 0");
         }
+        if (!orderColumns.contains("quantity")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1");
+        }
+        if (!orderColumns.contains("client_request_id")) {
+            jdbc.execute("ALTER TABLE orders ADD COLUMN client_request_id TEXT");
+        }
+        jdbc.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS orders_buyer_request_idx
+                ON orders(buyer_telegram_id, client_request_id)
+                WHERE client_request_id IS NOT NULL
+                """);
         jdbc.update("""
                 INSERT INTO seller_group_finance
                   (group_id, seller_telegram_id, commission_percent, debt_limit_kopecks)

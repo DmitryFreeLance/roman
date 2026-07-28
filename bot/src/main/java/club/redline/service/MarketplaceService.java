@@ -9,7 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -20,8 +20,8 @@ import java.util.Map;
 public class MarketplaceService {
     private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
     private static final DateTimeFormatter TELEGRAM_TIME =
-            DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'", Locale.forLanguageTag("ru"))
-                    .withZone(ZoneOffset.UTC);
+            DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'МСК'", Locale.forLanguageTag("ru"))
+                    .withZone(ZoneId.of("Europe/Moscow"));
     private final JdbcTemplate jdbc;
     private final TelegramApiClient telegram;
     private final long superAdminTelegramId;
@@ -72,13 +72,15 @@ public class MarketplaceService {
 
     public List<Map<String, Object>> catalog(long telegramGroupId) {
         return jdbc.queryForList("""
-                SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
+                SELECT p.id, p.title, p.description, p.specifications,
+                       p.category, p.stock, p.kind,
                        p.seller_price_kopecks,
                        CAST(ROUND(p.seller_price_kopecks *
                          (1 + s.bot_commission_percent / 100
                           + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, st.id AS store_id, st.name AS store_name,
+                       st.image_url AS store_image_url,
                        st.seller_telegram_id, s.username AS seller_username,
                        COALESCE(NULLIF(s.display_name, ''),
                          TRIM(s.first_name || ' ' || COALESCE(s.last_name, '')))
@@ -116,7 +118,7 @@ public class MarketplaceService {
                   )
                 GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
                          sgf.commission_percent,
-                         st.id, st.name, s.username, s.display_name,
+                         st.id, st.name, st.image_url, s.username, s.display_name,
                          s.first_name, s.last_name,
                          gb.target_count, gb.status, gb.payment_deadline
                 ORDER BY p.created_at DESC
@@ -126,13 +128,15 @@ public class MarketplaceService {
     public List<Map<String, Object>> sellerProducts(long sellerTelegramId,
                                                      long telegramGroupId) {
         return jdbc.queryForList("""
-                SELECT p.id, p.title, p.description, p.category, p.stock, p.kind,
+                SELECT p.id, p.title, p.description, p.specifications,
+                       p.category, p.stock, p.kind,
                        p.seller_price_kopecks,
                        CAST(ROUND(p.seller_price_kopecks *
                          (1 + u.bot_commission_percent / 100
                           + COALESCE(sgf.commission_percent, g.commission_percent) / 100)) AS INTEGER)
                          AS buyer_price_kopecks,
                        p.image_urls, p.active, st.id AS store_id, st.name AS store_name,
+                       st.image_url AS store_image_url,
                        st.seller_telegram_id,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(DISTINCT r.id) AS review_count,
@@ -156,7 +160,8 @@ public class MarketplaceService {
                   AND p.deleted = 0
                 GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
                          sgf.commission_percent,
-                         st.id, st.name, gb.id, gb.target_count, gb.status
+                         st.id, st.name, st.image_url,
+                         gb.id, gb.target_count, gb.status
                 ORDER BY p.created_at DESC
                 """, telegramGroupId, sellerTelegramId);
     }
@@ -183,22 +188,18 @@ public class MarketplaceService {
     @Transactional
     public void updateSellerProduct(long sellerTelegramId, long productId,
                                     UpdateProduct input) {
-        Integer categoryExists = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM categories WHERE name = ? AND active = 1
-                """, Integer.class, input.category());
-        if (categoryExists == null || categoryExists == 0) {
-            throw new IllegalArgumentException("Category is not available");
-        }
+        String category = ensureCategory(input.category());
         int updated = jdbc.update("""
                 UPDATE products
-                SET title = ?, description = ?, category = ?, stock = ?,
+                SET title = ?, description = ?, specifications = ?, category = ?, stock = ?,
                     seller_price_kopecks = ?, image_urls = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND deleted = 0 AND store_id IN (
                   SELECT id FROM stores WHERE seller_telegram_id = ?
                 )
-                """, input.title(), input.description(), input.category(),
-                input.stock(), input.sellerPriceKopecks(), input.imageUrlsJson(),
+                """, input.title(), input.description(),
+                input.specifications() == null ? "" : input.specifications(),
+                category, input.stock(), input.sellerPriceKopecks(), input.imageUrlsJson(),
                 productId, sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Product not found or access denied");
@@ -222,23 +223,20 @@ public class MarketplaceService {
     @Transactional
     public long createProduct(long sellerTelegramId, NewProduct input) {
         assertSellerCanTrade(sellerTelegramId, input.groupId());
-        Integer categoryExists = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM categories WHERE name = ? AND active = 1
-                """, Integer.class, input.category());
-        if (categoryExists == null || categoryExists == 0) {
-            throw new IllegalArgumentException("Category is not available");
-        }
+        String category = ensureCategory(input.category());
         Long storeId = jdbc.queryForObject("""
                 SELECT id FROM stores WHERE seller_telegram_id = ? AND group_id = ?
                 """, Long.class, sellerTelegramId, input.groupId());
         Long productId = jdbc.queryForObject("""
                 INSERT INTO products
-                  (store_id, group_id, title, description, category, stock, seller_price_kopecks,
-                   kind, image_urls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  (store_id, group_id, title, description, specifications, category, stock,
+                   seller_price_kopecks, kind, image_urls)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """, Long.class, storeId, input.groupId(), input.title(), input.description(),
-                input.category(), input.stock(), input.sellerPriceKopecks(), input.kind(),
+                input.specifications() == null ? "" : input.specifications(),
+                category, input.stock(),
+                input.sellerPriceKopecks(), input.kind(),
                 input.imageUrlsJson());
         if ("GROUP_BUY".equals(input.kind())) {
             jdbc.update("""
@@ -261,22 +259,24 @@ public class MarketplaceService {
         ensureSellerGroupFinance(input.groupId(), sellerTelegramId);
         Long storeId = jdbc.queryForObject("""
                 INSERT INTO stores
-                  (group_id, seller_telegram_id, name, description, payment_details)
-                VALUES (?, ?, ?, ?, ?)
+                  (group_id, seller_telegram_id, name, description,
+                   image_url, payment_details)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                   name = EXCLUDED.name,
                   description = EXCLUDED.description,
+                  image_url = EXCLUDED.image_url,
                   payment_details = EXCLUDED.payment_details,
                   active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
-                input.description(), input.paymentDetails());
+                input.description(), input.imageUrl(), input.paymentDetails());
         return storeId;
     }
 
     public Map<String, Object> myStore(long sellerTelegramId, long telegramGroupId) {
         return jdbc.queryForMap("""
-                SELECT st.id, st.name, st.description,
+                SELECT st.id, st.name, st.description, st.image_url,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -287,6 +287,18 @@ public class MarketplaceService {
                 WHERE st.seller_telegram_id = ? AND g.telegram_group_id = ?
                   AND st.active = 1
                 """, sellerTelegramId, telegramGroupId);
+    }
+
+    @Transactional
+    public void updateStoreImage(long sellerTelegramId, long storeId,
+                                 String imageUrl) {
+        int updated = jdbc.update("""
+                UPDATE stores SET image_url = ?
+                WHERE id = ? AND seller_telegram_id = ? AND active = 1
+                """, imageUrl.strip(), storeId, sellerTelegramId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Магазин не найден");
+        }
     }
 
     public Map<String, Object> profile(long telegramId) {
@@ -428,23 +440,37 @@ public class MarketplaceService {
         }
     }
 
-    @Transactional
-    public long createCategory(String name) {
-        String normalized = name.strip();
-        if (normalized.isEmpty()) throw new IllegalArgumentException("Category name is required");
-        Long id = jdbc.queryForObject("""
-                INSERT INTO categories (name, active)
-                VALUES (?, 1)
+    private String ensureCategory(String name) {
+        String normalized = name == null ? "" : name.strip().replaceAll("\\s+", " ");
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("Укажите категорию товара");
+        }
+        if (normalized.length() > 80) {
+            throw new IllegalArgumentException("Название категории не должно превышать 80 символов");
+        }
+        for (Map<String, Object> category : jdbc.queryForList(
+                "SELECT id, name FROM categories"
+        )) {
+            String existingName = String.valueOf(category.get("name"));
+            if (existingName.equalsIgnoreCase(normalized)) {
+                jdbc.update("UPDATE categories SET active = 1 WHERE id = ?",
+                        category.get("id"));
+                return existingName;
+            }
+        }
+        String created = jdbc.queryForObject("""
+                INSERT INTO categories (name, active, sort_order)
+                VALUES (
+                  ?, 1,
+                  (SELECT COALESCE(MAX(sort_order), 0) + 10 FROM categories)
+                )
                 ON CONFLICT (name) DO UPDATE SET active = 1
-                RETURNING id
-                """, Long.class, normalized);
-        if (id == null) throw new IllegalStateException("Category was not created");
-        return id;
-    }
-
-    @Transactional
-    public void deleteCategory(long categoryId) {
-        jdbc.update("UPDATE categories SET active = 0 WHERE id = ?", categoryId);
+                RETURNING name
+                """, String.class, normalized);
+        if (created == null) {
+            throw new IllegalStateException("Не удалось создать категорию");
+        }
+        return created;
     }
 
     @Transactional
@@ -578,7 +604,14 @@ public class MarketplaceService {
                 WHERE group_buy_id = ? AND buyer_telegram_id = ?
                   AND status IN ('RESERVED', 'PAYMENT_REQUESTED')
                 """, groupBuyId, buyerTelegramId);
-        if (updated == 0) throw new IllegalStateException("Reservation is not payable");
+        if (updated == 0) {
+            String status = jdbc.queryForObject("""
+                    SELECT status FROM group_buy_reservations
+                    WHERE group_buy_id = ? AND buyer_telegram_id = ?
+                    """, String.class, groupBuyId, buyerTelegramId);
+            if ("PAID".equals(status)) return;
+            throw new IllegalStateException("Reservation is not payable");
+        }
         notifyGroupBuySeller(groupBuyId, """
                 <b>Участник отметил оплату</b>
                 Покупатель: %s
@@ -695,7 +728,21 @@ public class MarketplaceService {
     }
 
     @Transactional
-    public long createOrder(long buyerTelegramId, long productId) {
+    public long createOrder(long buyerTelegramId, long productId, int quantity,
+                            String clientRequestId) {
+        if (quantity < 1 || quantity > 99) {
+            throw new IllegalArgumentException("Количество должно быть от 1 до 99");
+        }
+        if (clientRequestId == null || clientRequestId.isBlank()
+                || clientRequestId.length() > 100) {
+            throw new IllegalArgumentException("Некорректный идентификатор операции");
+        }
+        List<Long> existingOrderIds = jdbc.queryForList("""
+                SELECT id FROM orders
+                WHERE buyer_telegram_id = ? AND client_request_id = ?
+                """, Long.class, buyerTelegramId, clientRequestId);
+        if (!existingOrderIds.isEmpty()) return existingOrderIds.getFirst();
+
         Map<String, Object> product = jdbc.queryForMap("""
                 SELECT p.id, p.stock, p.seller_price_kopecks, p.group_id,
                        p.active, p.deleted, st.seller_telegram_id, u.bot_commission_percent,
@@ -720,23 +767,43 @@ public class MarketplaceService {
         }
         assertSellerCanTrade(sellerId, groupId);
         int stock = ((Number) product.get("stock")).intValue();
-        if (stock < 1) throw new IllegalStateException("Product is out of stock");
-        long sellerPrice = ((Number) product.get("seller_price_kopecks")).longValue();
+        if (stock < quantity) {
+            throw new IllegalStateException("Недостаточно товара: доступно " + stock);
+        }
+        long unitSellerPrice = ((Number) product.get("seller_price_kopecks")).longValue();
+        long sellerPrice = Math.multiplyExact(unitSellerPrice, quantity);
         double botRate = ((Number) product.get("bot_commission_percent")).doubleValue();
         double groupRate = ((Number) product.get("commission_percent")).doubleValue();
         long platformCommission = Math.round(sellerPrice * botRate / 100);
         long groupCommission = Math.round(sellerPrice * groupRate / 100);
         long commission = platformCommission + groupCommission;
         long buyerPrice = sellerPrice + commission;
-        Long orderId = jdbc.queryForObject("""
+        List<Long> insertedOrderIds = jdbc.queryForList("""
                 INSERT INTO orders
                   (product_id, buyer_telegram_id, seller_telegram_id, group_id,
                    seller_price_kopecks, buyer_price_kopecks, commission_kopecks,
-                   platform_commission_kopecks, group_commission_kopecks)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+                   platform_commission_kopecks, group_commission_kopecks,
+                   quantity, client_request_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                RETURNING id
                 """, Long.class, productId, buyerTelegramId, sellerId, groupId,
-                sellerPrice, buyerPrice, commission, platformCommission, groupCommission);
-        jdbc.update("UPDATE products SET stock = stock - 1 WHERE id = ?", productId);
+                sellerPrice, buyerPrice, commission, platformCommission, groupCommission,
+                quantity, clientRequestId);
+        if (insertedOrderIds.isEmpty()) {
+            return jdbc.queryForObject("""
+                    SELECT id FROM orders
+                    WHERE buyer_telegram_id = ? AND client_request_id = ?
+                    """, Long.class, buyerTelegramId, clientRequestId);
+        }
+        long orderId = insertedOrderIds.getFirst();
+        int stockUpdated = jdbc.update("""
+                UPDATE products SET stock = stock - ?
+                WHERE id = ? AND stock >= ?
+                """, quantity, productId, quantity);
+        if (stockUpdated == 0) {
+            throw new IllegalStateException("Недостаточно товара для заказа");
+        }
         Map<String, Object> order = orderNotificationDetails(orderId);
         notifyUser(sellerId, """
                 <b>Новый заказ</b>
@@ -766,7 +833,7 @@ public class MarketplaceService {
                                                      long telegramGroupId) {
         return jdbc.queryForList("""
                 SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
-                       o.commission_kopecks, o.created_at, o.updated_at,
+                       o.commission_kopecks, o.quantity, o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
                        review.rating AS review_rating,
                        st.id AS store_id, st.name AS store_name,
@@ -877,7 +944,7 @@ public class MarketplaceService {
                                                   long telegramGroupId) {
         return jdbc.queryForList("""
                 SELECT o.id, o.status, o.seller_price_kopecks, o.buyer_price_kopecks,
-                       o.commission_kopecks, o.created_at, o.updated_at,
+                       o.commission_kopecks, o.quantity, o.created_at, o.updated_at,
                        p.id AS product_id, p.title AS product_title, p.image_urls,
                        st.id AS store_id, st.name AS store_name,
                        buyer.telegram_id AS buyer_telegram_id,
@@ -926,13 +993,20 @@ public class MarketplaceService {
     public void advanceOrder(long orderId, long actorTelegramId, String targetStatus) {
         Map<String, Object> order = jdbc.queryForMap("""
                 SELECT buyer_telegram_id, seller_telegram_id, product_id, group_id,
-                       status, commission_kopecks,
+                       status, quantity, commission_kopecks,
                        platform_commission_kopecks, group_commission_kopecks
                 FROM orders WHERE id = ?
                 """, orderId);
         String current = String.valueOf(order.get("status"));
         long buyer = ((Number) order.get("buyer_telegram_id")).longValue();
         long seller = ((Number) order.get("seller_telegram_id")).longValue();
+        boolean actorMaySetTarget = switch (targetStatus) {
+            case "PAID", "COMPLETED" -> actorTelegramId == buyer;
+            case "SHIPPED" -> actorTelegramId == seller;
+            case "CANCELLED" -> actorTelegramId == buyer || actorTelegramId == seller;
+            default -> false;
+        };
+        if (current.equals(targetStatus) && actorMaySetTarget) return;
         boolean valid = switch (targetStatus) {
             case "PAID" -> actorTelegramId == buyer && "AWAITING_PAYMENT".equals(current);
             case "SHIPPED" -> actorTelegramId == seller && "PAID".equals(current);
@@ -957,7 +1031,8 @@ public class MarketplaceService {
         }
         Map<String, Object> details = orderNotificationDetails(orderId);
         if ("CANCELLED".equals(targetStatus)) {
-            jdbc.update("UPDATE products SET stock = stock + 1 WHERE id = ?",
+            jdbc.update("UPDATE products SET stock = stock + ? WHERE id = ?",
+                    ((Number) order.get("quantity")).intValue(),
                     ((Number) order.get("product_id")).longValue());
             long recipient = actorTelegramId == buyer ? seller : buyer;
             notifyUser(recipient, """
@@ -1386,6 +1461,87 @@ public class MarketplaceService {
                 WHERE telegram_id = ? AND super_admin = 1
                 """, Integer.class, telegramId);
         return count != null && count > 0;
+    }
+
+    public List<ClubTopic> clubTopics() {
+        return jdbc.query("""
+                SELECT telegram_group_id, shop_thread_id
+                FROM telegram_groups
+                ORDER BY id
+                """, (row, index) -> new ClubTopic(
+                row.getLong("telegram_group_id"),
+                row.getInt("shop_thread_id")
+        ));
+    }
+
+    @Transactional
+    public void updateClubShopThread(long telegramGroupId, int threadId) {
+        int updated = jdbc.update("""
+                UPDATE telegram_groups SET shop_thread_id = ?
+                WHERE telegram_group_id = ?
+                """, threadId, telegramGroupId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Клуб не найден");
+        }
+    }
+
+    @Transactional
+    public ClearResult clearMarketplaceData() {
+        int stores = countRows("stores");
+        int products = countRows("products");
+        int orders = countRows("orders");
+        int groupBuys = countRows("group_buys");
+
+        jdbc.update("DELETE FROM reviews");
+        jdbc.update("DELETE FROM seller_reports");
+        jdbc.update("DELETE FROM notifications");
+        jdbc.update("DELETE FROM commission_ledger");
+        jdbc.update("DELETE FROM group_commission_ledger");
+        jdbc.update("DELETE FROM favorites");
+        jdbc.update("DELETE FROM group_buy_reservations");
+        jdbc.update("DELETE FROM group_buys");
+        jdbc.update("DELETE FROM orders");
+        jdbc.update("DELETE FROM products");
+        jdbc.update("DELETE FROM group_seller_bans");
+        jdbc.update("DELETE FROM seller_group_finance");
+        jdbc.update("DELETE FROM stores");
+        jdbc.update("""
+                UPDATE users
+                SET commission_debt_kopecks = 0,
+                    seller_blocked = 0,
+                    globally_banned = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                """);
+        jdbc.update("DELETE FROM categories");
+        jdbc.update("""
+                INSERT INTO categories (name, sort_order) VALUES
+                  ('Колодки', 10),
+                  ('Масла и автохимия', 20),
+                  ('Тормоза', 30),
+                  ('Подвеска', 40),
+                  ('Фильтры', 50),
+                  ('Двигатель', 60),
+                  ('Электрика', 70),
+                  ('Шины и диски', 80),
+                  ('Аксессуары', 90)
+                """);
+        jdbc.update("""
+                DELETE FROM sqlite_sequence
+                WHERE name IN (
+                  'stores', 'products', 'group_buys', 'group_buy_reservations',
+                  'orders', 'notifications', 'seller_reports', 'reviews',
+                  'commission_ledger', 'group_commission_ledger'
+                )
+                """);
+        return new ClearResult(stores, products, orders, groupBuys);
+    }
+
+    private int countRows(String table) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM " + table,
+                Integer.class
+        );
+        return count == null ? 0 : count;
     }
 
     @Transactional
@@ -1968,7 +2124,7 @@ public class MarketplaceService {
 
     private Map<String, Object> orderNotificationDetails(long orderId) {
         return jdbc.queryForMap("""
-                SELECT o.id, o.status, o.buyer_price_kopecks,
+                SELECT o.id, o.status, o.quantity, o.buyer_price_kopecks,
                        o.seller_price_kopecks, o.commission_kopecks,
                        p.title AS product_title, st.name AS store_name,
                        buyer.telegram_id AS buyer_telegram_id,
@@ -1994,6 +2150,7 @@ public class MarketplaceService {
         return """
                 Заказ: <b>#%s</b>
                 Товар: <b>%s</b>
+                Количество: <b>%s шт.</b>
                 Магазин: %s
                 Сумма покупателя: <b>%s</b>
                 Покупатель: %s
@@ -2001,6 +2158,7 @@ public class MarketplaceService {
                 """.formatted(
                 order.get("id"),
                 escapeHtml(order.get("product_title")),
+                order.get("quantity"),
                 escapeHtml(order.get("store_name")),
                 formatMoney(order.get("buyer_price_kopecks")),
                 userLabel(order, "buyer"),
@@ -2154,13 +2312,17 @@ public class MarketplaceService {
         return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
-    public record NewProduct(long groupId, String title, String description, String category,
+    public record NewProduct(long groupId, String title, String description,
+                             String specifications, String category,
                              int stock, long sellerPriceKopecks, String kind,
                              String imageUrlsJson, Integer targetCount, Integer collectionDays) {}
-    public record UpdateProduct(String title, String description, String category,
+    public record UpdateProduct(String title, String description, String specifications,
+                                String category,
                                 int stock, long sellerPriceKopecks,
                                 String imageUrlsJson) {}
     public record NewStore(long groupId, String name, String description,
-                           String paymentDetails) {}
+                           String imageUrl, String paymentDetails) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
+    public record ClubTopic(long telegramGroupId, int threadId) {}
+    public record ClearResult(int stores, int products, int orders, int groupBuys) {}
 }

@@ -129,6 +129,19 @@ public class ImageStorageService implements ApplicationRunner {
         return uploadDirectory;
     }
 
+    public int clearAll() {
+        if (!Files.isDirectory(uploadDirectory)) return 0;
+        try (var files = Files.list(uploadDirectory)) {
+            int deleted = 0;
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                if (Files.deleteIfExists(file)) deleted++;
+            }
+            return deleted;
+        } catch (IOException error) {
+            throw new IllegalStateException("Unable to clear uploaded images", error);
+        }
+    }
+
     @Override
     public void run(ApplicationArguments args) {
         if (!Files.isDirectory(uploadDirectory)) return;

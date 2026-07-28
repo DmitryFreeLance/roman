@@ -51,6 +51,10 @@ class SqliteSchemaInitializerTest {
         assertThat(foreignKeys).isEqualTo(1);
         assertThat(tables).isEqualTo(11);
         assertThat(settings).isEqualTo(1);
-        assertThat(businessRows).isZero();
+        assertThat(businessRows).isEqualTo(9);
+        assertThat(jdbc.queryForList(
+                "SELECT name FROM categories ORDER BY sort_order",
+                String.class
+        )).contains("Колодки", "Масла и автохимия", "Тормоза");
     }
 }

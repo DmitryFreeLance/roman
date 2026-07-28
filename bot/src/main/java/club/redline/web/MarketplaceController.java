@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -123,7 +124,8 @@ public class MarketplaceController {
                                            @Valid @RequestBody CreateProductRequest request) {
         TelegramUser user = registered(initData);
         long id = marketplace.createProduct(user.id(), new NewProduct(
-                request.groupId(), request.title(), request.description(), request.category(),
+                request.groupId(), request.title(), request.description(),
+                request.specifications(), request.category(),
                 request.stock(), request.sellerPriceKopecks(), request.kind(),
                 request.imageUrlsJson(), request.targetCount(), request.collectionDays()
         ));
@@ -158,7 +160,8 @@ public class MarketplaceController {
             @Valid @RequestBody UpdateProductRequest request) {
         marketplace.updateSellerProduct(registered(initData).id(), productId,
                 new UpdateProduct(
-                        request.title(), request.description(), request.category(),
+                        request.title(), request.description(), request.specifications(),
+                        request.category(),
                         request.stock(), request.sellerPriceKopecks(),
                         request.imageUrlsJson()
                 ));
@@ -186,9 +189,20 @@ public class MarketplaceController {
         TelegramUser user = registered(initData);
         long id = marketplace.createStore(user.id(), new NewStore(
                 request.groupId(), request.name(), request.description(),
-                request.paymentDetails()
+                request.imageUrl(), request.paymentDetails()
         ));
         return Map.of("id", id);
+    }
+
+    @PutMapping("/stores/{storeId}/image")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateStoreImage(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long storeId,
+            @Valid @RequestBody StoreImageRequest request) {
+        marketplace.updateStoreImage(
+                registered(initData).id(), storeId, request.imageUrl()
+        );
     }
 
     @PostMapping("/group-buys/{id}/reservations")
@@ -240,8 +254,12 @@ public class MarketplaceController {
     @PostMapping("/products/{productId}/orders")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Long> createOrder(@RequestHeader("X-Telegram-Init-Data") String initData,
-                                         @PathVariable long productId) {
-        return Map.of("id", marketplace.createOrder(registered(initData).id(), productId));
+                                         @PathVariable long productId,
+                                         @Valid @RequestBody CreateOrderRequest request) {
+        return Map.of("id", marketplace.createOrder(
+                registered(initData).id(), productId,
+                request.quantity(), request.requestId()
+        ));
     }
 
     @GetMapping("/groups/{telegramGroupId}/orders/purchases")
@@ -522,24 +540,6 @@ public class MarketplaceController {
         );
     }
 
-    @PostMapping("/admin/categories")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Long> createCategory(
-            @RequestHeader("X-Telegram-Init-Data") String initData,
-            @Valid @RequestBody CategoryRequest request) {
-        requireSuperAdmin(initData);
-        return Map.of("id", marketplace.createCategory(request.name()));
-    }
-
-    @DeleteMapping("/admin/categories/{categoryId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteCategory(
-            @RequestHeader("X-Telegram-Init-Data") String initData,
-            @PathVariable long categoryId) {
-        requireSuperAdmin(initData);
-        marketplace.deleteCategory(categoryId);
-    }
-
     private TelegramUser authenticated(String initData) {
         TelegramUser user = verifier.verify(initData);
         marketplace.upsertUser(user);
@@ -575,12 +575,12 @@ public class MarketplaceController {
     public record RegistrationRequest(@NotBlank String displayName,
                                       @NotBlank String phone,
                                       @Positive Long groupId) {}
-    public record CategoryRequest(@NotBlank String name) {}
     public record CreateProductRequest(
             long groupId,
             @NotBlank String title,
             @NotBlank String description,
-            @NotBlank String category,
+            String specifications,
+            @NotBlank @Size(max = 80) String category,
             @Positive int stock,
             @Positive long sellerPriceKopecks,
             @NotBlank String kind,
@@ -592,17 +592,22 @@ public class MarketplaceController {
             long groupId,
             @NotBlank String name,
             String description,
+            @NotBlank String imageUrl,
             @NotBlank String paymentDetails
     ) {}
+    public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record UpdateProductRequest(
             @NotBlank String title,
             @NotBlank String description,
-            @NotBlank String category,
+            String specifications,
+            @NotBlank @Size(max = 80) String category,
             @Positive int stock,
             @Positive long sellerPriceKopecks,
             @NotBlank String imageUrlsJson
     ) {}
     public record ProductActiveRequest(boolean active) {}
+    public record CreateOrderRequest(@Min(1) @Max(99) int quantity,
+                                     @NotBlank @Size(max = 100) String requestId) {}
     public record ReserveRequest(String phone) {}
     public record FavoriteRequest(boolean favorite) {}
     public record ReviewRequest(@Min(1) @Max(5) int rating) {}

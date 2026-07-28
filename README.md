@@ -66,13 +66,91 @@ docker exec redline-bot ls -ld /data/uploads
 При старте приложение подготавливает таблицы Базы данных,
 удаляет прежний webhook и запускает `getUpdates`.
 
-Новая база не содержит демонстрационных пользователей, групп, категорий или
-товаров. Пользователь регистрируется при первом входе. Группа появляется только
-после добавления бота администратором с правом управления темами. Категории
-создаёт супер-администратор в Mini App.
+Новая база не содержит демонстрационных пользователей, групп или товаров.
+Пользователь регистрируется при первом входе. Группа появляется только после
+добавления бота администратором с правом управления темами. Базовые категории
+автотоваров создаются автоматически. Если продавец впишет в объявлении новую
+категорию, она сохранится и появится в общем списке выбора.
 
 Запускайте только один экземпляр контейнера с данным токеном: Telegram не
 разрешает параллельный long polling для одного бота.
+
+## Очистить данные маркетплейса командой `/clear`
+
+Супер-администратор может отправить боту команду `/clear` в личном чате.
+Бот покажет полный список удаляемых данных и кнопку подтверждения. После
+подтверждения удаляются магазины, объявления, заказы, покупки, групповые
+закупки, отзывы, жалобы, уведомления, комиссионные операции и загруженные
+изображения. Темы «Магазин» в клубах пересоздаются, поэтому опубликованные в
+них объявления также исчезают.
+
+Клубы, пользователи, права супер-администраторов, настройки платформы и базовые
+категории сохраняются. Долги, блокировки продавцов и пользовательские категории
+сбрасываются.
+
+### Аварийная ручная очистка
+
+Сначала остановите контейнер, чтобы бот не записывал данные во время очистки:
+
+```bash
+docker stop redline-bot
+```
+
+Сделайте резервную копию базы:
+
+```bash
+docker run --rm \
+  -v redline-bot-data:/data \
+  -v "$PWD":/backup \
+  alpine:3.20 \
+  cp /data/redline.db /backup/redline-before-cleanup.db
+```
+
+Удалите товары, заказы, магазины и связанные записи. Таблицы
+`telegram_groups`, `users`, `categories` и `platform_settings` этот запрос
+не удаляет:
+
+```bash
+docker run --rm -i \
+  -v redline-bot-data:/data \
+  alpine:3.20 sh -c \
+  'apk add --no-cache sqlite >/dev/null && sqlite3 /data/redline.db' <<'SQL'
+PRAGMA foreign_keys = ON;
+BEGIN IMMEDIATE;
+DELETE FROM reviews;
+DELETE FROM seller_reports;
+DELETE FROM notifications;
+DELETE FROM commission_ledger;
+DELETE FROM group_commission_ledger;
+DELETE FROM favorites;
+DELETE FROM group_buy_reservations;
+DELETE FROM group_buys;
+DELETE FROM orders;
+DELETE FROM products;
+DELETE FROM group_seller_bans;
+DELETE FROM seller_group_finance;
+DELETE FROM stores;
+UPDATE users
+SET commission_debt_kopecks = 0,
+    seller_blocked = 0,
+    globally_banned = 0,
+    updated_at = CURRENT_TIMESTAMP;
+DELETE FROM sqlite_sequence
+WHERE name IN (
+  'reviews', 'seller_reports', 'notifications', 'commission_ledger',
+  'group_commission_ledger', 'group_buy_reservations', 'group_buys',
+  'orders', 'products', 'stores'
+);
+COMMIT;
+SQL
+```
+
+После этого снова запустите приложение:
+
+```bash
+docker start redline-bot
+docker logs --tail 100 redline-bot
+```
 
 ## 2. Полный nginx-конфиг
 

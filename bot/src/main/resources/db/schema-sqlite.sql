@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE INDEX IF NOT EXISTS categories_active_sort_idx
   ON categories(active, sort_order, name);
 
+INSERT OR IGNORE INTO categories (name, sort_order) VALUES
+  ('Колодки', 10),
+  ('Масла и автохимия', 20),
+  ('Тормоза', 30),
+  ('Подвеска', 40),
+  ('Фильтры', 50),
+  ('Двигатель', 60),
+  ('Электрика', 70),
+  ('Шины и диски', 80),
+  ('Аксессуары', 90);
+
 CREATE TABLE IF NOT EXISTS telegram_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   telegram_group_id INTEGER UNIQUE NOT NULL,
@@ -61,6 +72,7 @@ CREATE TABLE IF NOT EXISTS stores (
   seller_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
   name TEXT NOT NULL,
   description TEXT,
+  image_url TEXT,
   payment_phone TEXT,
   payment_card TEXT,
   payment_details TEXT,
@@ -94,6 +106,7 @@ CREATE TABLE IF NOT EXISTS products (
   group_id INTEGER NOT NULL REFERENCES telegram_groups(id),
   title TEXT NOT NULL,
   description TEXT NOT NULL,
+  specifications TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL,
   stock INTEGER NOT NULL CHECK (stock >= 0),
   seller_price_kopecks INTEGER NOT NULL CHECK (seller_price_kopecks > 0),
@@ -162,6 +175,8 @@ CREATE TABLE IF NOT EXISTS orders (
   commission_kopecks INTEGER NOT NULL,
   platform_commission_kopecks INTEGER NOT NULL DEFAULT 0,
   group_commission_kopecks INTEGER NOT NULL DEFAULT 0,
+  quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  client_request_id TEXT,
   status TEXT NOT NULL DEFAULT 'AWAITING_PAYMENT'
     CHECK (status IN ('AWAITING_PAYMENT', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

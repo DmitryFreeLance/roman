@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   Bell,
   Check,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -16,8 +17,10 @@ import {
   ImagePlus,
   LayoutDashboard,
   Menu,
+  Minus,
   PackagePlus,
   Pencil,
+  Plus,
   Search,
   ShieldCheck,
   ShoppingBag,
@@ -28,7 +31,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Screen =
   | "market"
@@ -107,6 +110,7 @@ type Product = {
   id: number;
   title: string;
   description: string;
+  specifications: string;
   category: string;
   stock: number;
   kind: "regular" | "group";
@@ -115,6 +119,7 @@ type Product = {
   images: string[];
   storeId: number;
   storeName: string;
+  storeImageUrl?: string;
   sellerTelegramId: number;
   sellerName?: string;
   sellerUsername?: string;
@@ -142,6 +147,7 @@ type SellerStore = {
   id: number;
   name: string;
   description?: string;
+  imageUrl?: string;
   paymentDetails: string;
 };
 
@@ -182,6 +188,7 @@ type Order = {
   sellerPriceKopecks: number;
   buyerPriceKopecks: number;
   commissionKopecks: number;
+  quantity: number;
   createdAt: string;
   sellerName?: string;
   sellerUsername?: string;
@@ -194,6 +201,7 @@ type Order = {
 
 type TelegramWebApp = {
   initData: string;
+  isFullscreen?: boolean;
   initDataUnsafe?: {
     user?: {
       id: number;
@@ -204,7 +212,11 @@ type TelegramWebApp = {
   };
   ready: () => void;
   expand: () => void;
+  exitFullscreen?: () => void;
+  isVersionAtLeast?: (version: string) => boolean;
   hideKeyboard?: () => void;
+  BackButton?: { hide: () => void };
+  SettingsButton?: { hide: () => void };
   HapticFeedback?: {
     impactOccurred: (style: "light" | "medium" | "heavy") => void;
     notificationOccurred: (type: "success" | "warning" | "error") => void;
@@ -232,6 +244,19 @@ const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
 
 const formatPrice = (kopecks: number) =>
   `${new Intl.NumberFormat("ru-RU").format(Math.round(kopecks / 100))} ₽`;
+
+const MOSCOW_TIME_ZONE = "Europe/Moscow";
+const parseApiDate = (value: string) => {
+  const normalized =
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? `${value.replace(" ", "T")}Z`
+      : value;
+  return new Date(normalized);
+};
+const formatMoscowDate = (value: string) =>
+  parseApiDate(value).toLocaleDateString("ru-RU", { timeZone: MOSCOW_TIME_ZONE });
+const formatMoscowDateTime = (value: string) =>
+  parseApiDate(value).toLocaleString("ru-RU", { timeZone: MOSCOW_TIME_ZONE });
 
 const asBoolean = (value: unknown) =>
   value === true || value === 1 || value === "1" || value === "true";
@@ -315,6 +340,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     id: asNumber(row.id),
     title: String(row.title || ""),
     description: String(row.description || ""),
+    specifications: String(row.specifications || ""),
     category: String(row.category || ""),
     stock: asNumber(row.stock),
     kind: row.kind === "GROUP_BUY" ? "group" : "regular",
@@ -323,6 +349,9 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     images,
     storeId: asNumber(row.store_id),
     storeName: String(row.store_name || ""),
+    storeImageUrl: row.store_image_url
+      ? String(row.store_image_url)
+      : undefined,
     sellerTelegramId: asNumber(row.seller_telegram_id),
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
@@ -357,6 +386,7 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     sellerPriceKopecks: asNumber(row.seller_price_kopecks),
     buyerPriceKopecks: asNumber(row.buyer_price_kopecks),
     commissionKopecks: asNumber(row.commission_kopecks),
+    quantity: Math.max(1, asNumber(row.quantity)),
     createdAt: String(row.created_at || ""),
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
     sellerUsername: row.seller_username
@@ -376,6 +406,7 @@ const camelStore = (row: Record<string, unknown>): SellerStore => ({
   id: asNumber(row.id),
   name: String(row.name || ""),
   description: row.description ? String(row.description) : undefined,
+  imageUrl: row.image_url ? String(row.image_url) : undefined,
   paymentDetails: String(row.payment_details || ""),
 });
 
@@ -445,7 +476,13 @@ export function RedlineApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [screen, setScreen] = useState<Screen>("market");
+  const [screen, setScreen] = useState<Screen>(() => {
+    if (typeof window === "undefined") return "market";
+    const stored = window.sessionStorage.getItem("redline-active-screen");
+    return stored && navBase.some((item) => item.id === stored)
+      ? (stored as Screen)
+      : "market";
+  });
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [activeCategory, setActiveCategory] = useState("Все");
   const [activeStoreId, setActiveStoreId] = useState<number | null>(null);
@@ -462,13 +499,21 @@ export function RedlineApp() {
     const connectTelegram = async () => {
       await Promise.resolve();
       let telegram = window.Telegram?.WebApp;
-      for (let attempt = 0; !telegram?.initData && attempt < 20; attempt += 1) {
+      for (let attempt = 0; !telegram?.initData && attempt < 100; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 100));
         telegram = window.Telegram?.WebApp;
       }
       if (cancelled) return;
       telegram?.ready();
       telegram?.expand();
+      telegram?.BackButton?.hide();
+      telegram?.SettingsButton?.hide();
+      if (
+        telegram?.isFullscreen &&
+        telegram.isVersionAtLeast?.("8.0")
+      ) {
+        telegram.exitFullscreen?.();
+      }
       const data = telegram?.initData || "";
       setInitData(data);
       if (!data) {
@@ -484,6 +529,10 @@ export function RedlineApp() {
     // The Telegram payload is captured exactly once when the Mini App opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    window.sessionStorage.setItem("redline-active-screen", screen);
+  }, [screen]);
 
   useEffect(() => {
     if (!toast) return;
@@ -691,7 +740,9 @@ export function RedlineApp() {
       const current = byId.get(product.storeId);
       if (current) {
         current.productCount += 1;
-        if (!current.cover && product.images[0]) current.cover = product.images[0];
+        if (!current.cover && product.storeImageUrl) {
+          current.cover = product.storeImageUrl;
+        }
         current.rating = product.storeRating;
       } else {
         byId.set(product.storeId, {
@@ -699,7 +750,7 @@ export function RedlineApp() {
           name: product.storeName,
           sellerTelegramId: product.sellerTelegramId,
           productCount: 1,
-          cover: product.images[0],
+          cover: product.storeImageUrl,
           rating: product.storeRating,
         });
       }
@@ -794,12 +845,20 @@ export function RedlineApp() {
     }
   }
 
-  async function buy(product: Product) {
+  async function buy(product: Product, quantity: number) {
     try {
-      await request(`/products/${product.id}/orders`, { method: "POST" });
+      const requestId =
+        globalThis.crypto?.randomUUID?.() ||
+        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await request(`/products/${product.id}/orders`, {
+        method: "POST",
+        body: JSON.stringify({ quantity, requestId }),
+      });
       setSelectedProduct(null);
       navigate("orders");
-      setToast("Заказ создан. Продавец получил уведомление.");
+      setToast(
+        `Заказ на ${quantity} шт. создан. Продавец получил одно уведомление.`,
+      );
     } catch (buyError) {
       setToast(
         buyError instanceof Error ? buyError.message : "Не удалось создать заказ",
@@ -1060,7 +1119,12 @@ export function RedlineApp() {
             request={request}
             onCreate={() => navigate("create")}
             onChanged={async () => {
-              if (selectedClub) await loadCatalog(selectedClub.telegramGroupId);
+              await Promise.all([
+                selectedClub
+                  ? loadCatalog(selectedClub.telegramGroupId)
+                  : Promise.resolve(),
+                reloadCategories(),
+              ]);
             }}
             onToast={setToast}
           />
@@ -1078,8 +1142,19 @@ export function RedlineApp() {
             club={selectedClub}
             categories={categories}
             request={request}
+            onStoreImageChanged={async () => {
+              if (selectedClub) {
+                await loadCatalog(selectedClub.telegramGroupId);
+              }
+              setToast("Фотография магазина обновлена");
+            }}
             onCreated={async () => {
-              if (selectedClub) await loadCatalog(selectedClub.telegramGroupId);
+              await Promise.all([
+                selectedClub
+                  ? loadCatalog(selectedClub.telegramGroupId)
+                  : Promise.resolve(),
+                reloadCategories(),
+              ]);
               setToast("Объявление опубликовано в теме «Магазин».");
               navigate("market");
             }}
@@ -1101,9 +1176,7 @@ export function RedlineApp() {
 
         {screen === "superadmin" && profile?.superAdmin && (
           <SuperAdmin
-            categories={categories}
             request={request}
-            onCategoriesChanged={reloadCategories}
             onToast={setToast}
           />
         )}
@@ -1134,12 +1207,13 @@ export function RedlineApp() {
 
       {selectedProduct && (
         <ProductModal
+          key={selectedProduct.id}
           product={selectedProduct}
           favorite={favorites.includes(selectedProduct.id)}
           onFavorite={() => void toggleFavorite(selectedProduct.id)}
           onClose={() => setSelectedProduct(null)}
           onReserve={() => void reserve(selectedProduct)}
-          onBuy={() => void buy(selectedProduct)}
+          onBuy={(quantity) => buy(selectedProduct, quantity)}
         />
       )}
 
@@ -1405,9 +1479,9 @@ function Market({
                 >
                   <span className="storefront-cover">
                     {store.cover ? (
-                      // Product uploads are served by the same app and lazy-loaded below the fold.
+                      // Store uploads are served by the same app and lazy-loaded below the fold.
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={store.cover} alt="" loading="lazy" decoding="async" />
+                      <img src={store.cover} alt={`Обложка магазина ${store.name}`} loading="lazy" decoding="async" />
                     ) : store.name.slice(0, 2).toUpperCase()}
                   </span>
                   <b>{store.name}</b>
@@ -1557,35 +1631,122 @@ function ProductModal({
   onFavorite: () => void;
   onClose: () => void;
   onReserve: () => void;
-  onBuy: () => void;
+  onBuy: (quantity: number) => Promise<void>;
 }) {
+  const [activeImage, setActiveImage] = useState(0);
+  const [quantity, setQuantity] = useState(1);
+  const [buying, setBuying] = useState(false);
+  const buyingRef = useRef(false);
   const progress = product.targetCount
     ? Math.min(100, Math.round((product.reservedCount / product.targetCount) * 100))
     : 0;
+  const images = product.images.filter(Boolean);
+  const selectedImage = images[activeImage];
+
+  const changeImage = (direction: number) => {
+    if (images.length < 2) return;
+    setActiveImage((current) =>
+      (current + direction + images.length) % images.length,
+    );
+  };
+
+  const submitBuy = async () => {
+    if (buyingRef.current) return;
+    buyingRef.current = true;
+    setBuying(true);
+    try {
+      await onBuy(quantity);
+    } finally {
+      buyingRef.current = false;
+      setBuying(false);
+    }
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <article className="product-modal">
-        <div className="modal-visual actual-product-image" style={product.images[0] ? { backgroundImage: `linear-gradient(transparent 50%, #101010), url("${product.images[0]}")` } : undefined}>
-          <button className="modal-close" onClick={onClose}><X size={19} /></button>
-          <button className={`modal-heart ${favorite ? "active" : ""}`} onClick={onFavorite}><Heart size={18} fill={favorite ? "currentColor" : "none"} /></button>
+        <div className={`modal-visual actual-product-image ${selectedImage ? "has-image" : ""}`}>
+          {selectedImage && (
+            // Preserve the original proportions instead of cropping the photo.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={selectedImage} alt={`${product.title}, фото ${activeImage + 1}`} />
+          )}
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Закрыть"><X size={19} /></button>
+          <button type="button" className={`modal-heart ${favorite ? "active" : ""}`} onClick={onFavorite} aria-label="В избранное"><Heart size={18} fill={favorite ? "currentColor" : "none"} /></button>
+          {images.length > 1 && (
+            <>
+              <button type="button" className="slider-arrow slider-arrow-left" onClick={() => changeImage(-1)} aria-label="Предыдущее фото"><ChevronLeft size={21} /></button>
+              <button type="button" className="slider-arrow slider-arrow-right" onClick={() => changeImage(1)} aria-label="Следующее фото"><ChevronRight size={21} /></button>
+              <div className="slider-counter">{activeImage + 1} / {images.length}</div>
+            </>
+          )}
         </div>
+        {images.length > 1 && (
+          <div className="product-thumbnails" aria-label="Фотографии товара">
+            {images.map((image, index) => (
+              <button
+                type="button"
+                key={`${image}-${index}`}
+                className={index === activeImage ? "active" : ""}
+                onClick={() => setActiveImage(index)}
+                aria-label={`Открыть фото ${index + 1}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image} alt="" />
+              </button>
+            ))}
+          </div>
+        )}
         <div className="modal-body">
           <span className="seller-line"><BadgeCheck size={13} />{product.storeName}</span>
+          <span className="availability-chip">● В наличии · {product.stock} шт.</span>
           <h2>{product.title}</h2>
           <div className="rating-line modal-rating">
             <Star size={15} fill={product.reviewCount ? "currentColor" : "none"} />
             <b>{product.reviewCount ? product.rating.toFixed(1) : "—"}</b>
             <span>{product.reviewCount ? `${product.reviewCount} оценок` : "Оценок пока нет"}</span>
           </div>
-          <p>{product.description}</p>
+          <section className="product-detail-section">
+            <span>Описание</span>
+            <p>{product.description}</p>
+          </section>
+          {product.specifications && (
+            <section className="product-detail-section product-specifications">
+              <span>Характеристики</span>
+              <p>{product.specifications}</p>
+            </section>
+          )}
           {product.kind === "group" && product.targetCount && (
             <div className="modal-group-box">
               <div><span>Собрано</span><b>{product.reservedCount} / {product.targetCount}</b></div>
               <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
             </div>
           )}
-          <div className="modal-price"><span>Цена покупателя</span><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div>
-          <button className="main-action" onClick={product.kind === "group" ? onReserve : onBuy}>{product.kind === "group" ? "Забронировать место" : "Купить"}</button>
+          <div className="modal-price">
+            <span>Цена</span>
+            <strong>{formatPrice(product.buyerPriceKopecks)}</strong>
+          </div>
+          {product.kind === "regular" && (
+            <div className="quantity-picker">
+              <div><span>Количество</span><small>Доступно: {product.stock} шт.</small></div>
+              <div>
+                <button type="button" onClick={() => setQuantity((current) => Math.max(1, current - 1))} disabled={quantity <= 1} aria-label="Уменьшить количество"><Minus size={17} /></button>
+                <b>{quantity}</b>
+                <button type="button" onClick={() => setQuantity((current) => Math.min(product.stock, current + 1))} disabled={quantity >= product.stock} aria-label="Увеличить количество"><Plus size={17} /></button>
+              </div>
+            </div>
+          )}
+          <button
+            className="main-action product-buy-action"
+            disabled={buying || product.stock < 1}
+            onClick={product.kind === "group" ? onReserve : () => void submitBuy()}
+          >
+            {product.kind === "group"
+              ? "Забронировать место"
+              : buying
+                ? "Создаём заказ…"
+                : `Купить · ${formatPrice(product.buyerPriceKopecks * quantity)}`}
+          </button>
         </div>
       </article>
     </div>
@@ -1832,6 +1993,7 @@ function EditListingModal({
         body: JSON.stringify({
           title: String(form.get("title")),
           description: String(form.get("description")),
+          specifications: String(form.get("specifications")),
           category: String(form.get("category")),
           stock: Number(form.get("stock")),
           sellerPriceKopecks: Math.round(Number(form.get("price")) * 100),
@@ -1879,8 +2041,24 @@ function EditListingModal({
           </label>
           <p className="upload-caption">Нажмите на фото, чтобы заменить весь набор.</p>
           <label><span>Название товара</span><input name="title" defaultValue={product.title} required /></label>
-          <label><span>Категория</span><select name="category" defaultValue={product.category} required>{categories.map((category) => <option key={category.id}>{category.name}</option>)}</select></label>
+          <label>
+            <span>Категория</span>
+            <input
+              name="category"
+              list="edit-category-options"
+              defaultValue={product.category}
+              maxLength={80}
+              required
+              placeholder="Выберите или впишите новую"
+            />
+            <datalist id="edit-category-options">
+              {categories.map((category) => (
+                <option key={category.id} value={category.name} />
+              ))}
+            </datalist>
+          </label>
           <label><span>Описание</span><textarea name="description" defaultValue={product.description} rows={4} required /></label>
+          <label><span>Характеристики</span><textarea name="specifications" defaultValue={product.specifications} rows={4} placeholder="Артикул, производитель, размеры, совместимость…" /></label>
           <div className="form-row">
             <label><span>Цена продавца, ₽</span><input name="price" type="number" min="1" step="1" defaultValue={Math.round(product.sellerPriceKopecks / 100)} required /></label>
             <label><span>Количество</span><input name="stock" type="number" min="1" defaultValue={product.stock} required /></label>
@@ -1914,9 +2092,9 @@ function OrdersPage({
   const [salesTab, setSalesTab] = useState<"active" | "completed">("active");
   const [reportingOrder, setReportingOrder] = useState<Order | null>(null);
 
-  async function loadOrders() {
+  async function loadOrders(showLoading = true) {
     if (!club) return;
-    setLoading(true);
+    if (showLoading) setLoading(true);
     try {
       const [rows, groupRows] = await Promise.all([
         request<Record<string, unknown>[]>(
@@ -1939,59 +2117,33 @@ function OrdersPage({
         setGroupBuyPurchases(groupRows.map(camelGroupBuyPurchase));
       }
     } catch (ordersError) {
-      onToast(
-        ordersError instanceof Error
-          ? ordersError.message
-          : "Не удалось загрузить заказы",
-      );
+      if (showLoading) {
+        onToast(
+          ordersError instanceof Error
+            ? ordersError.message
+            : "Не удалось загрузить заказы",
+        );
+      }
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }
 
   useEffect(() => {
     if (!club) return;
-    let cancelled = false;
-    void Promise.all([
-      request<Record<string, unknown>[]>(
-        `/groups/${club.telegramGroupId}/orders/${mode}`,
-      ),
-      mode === "sales"
-        ? request<Record<string, unknown>[]>(
-            `/groups/${club.telegramGroupId}/my-products`,
-          )
-        : request<Record<string, unknown>[]>(
-            `/groups/${club.telegramGroupId}/group-buys/purchases`,
-          ),
-    ])
-      .then(([rows, groupRows]) => {
-        if (!cancelled) {
-          setOrders(rows.map(camelOrder));
-          if (mode === "sales") {
-            setSellerGroupBuys(
-              groupRows.map(camelProduct).filter((product) => product.kind === "group"),
-            );
-          } else {
-            setGroupBuyPurchases(groupRows.map(camelGroupBuyPurchase));
-          }
-        }
-      })
-      .catch((ordersError) => {
-        if (!cancelled) {
-          onToast(
-            ordersError instanceof Error
-              ? ordersError.message
-              : "Не удалось загрузить заказы",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
+    const initial = window.setTimeout(() => void loadOrders(true), 0);
+    const refresh = () => void loadOrders(false);
+    const timer = window.setInterval(refresh, 5_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
     };
-    // Orders reload when role or selected Telegram group changes.
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // Keep order statuses in sync while both sides have the Mini App open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [club?.telegramGroupId, mode]);
 
@@ -2023,7 +2175,7 @@ function OrdersPage({
     }
   }
 
-  async function review(order: Order, rating: number) {
+  async function review(order: Order, rating: number): Promise<boolean> {
     try {
       await request(`/orders/${order.id}/review`, {
         method: "POST",
@@ -2041,11 +2193,12 @@ function OrdersPage({
           ? reviewError.message
           : "Не удалось сохранить оценку",
       );
-      return;
+      return false;
     }
     void onCatalogChanged?.().catch(() => {
       // The review is already saved; the catalog will refresh on the next visit.
     });
+    return true;
   }
 
   const shownOrders =
@@ -2118,9 +2271,9 @@ function OrdersPage({
                   : [...current, order.id],
               )
             }
-            onAdvance={(status) => void advance(order, status)}
+            onAdvance={(status) => advance(order, status)}
             onReport={() => setReportingOrder(order)}
-            onReview={(rating) => void review(order, rating)}
+            onReview={(rating) => review(order, rating)}
             onToast={onToast}
           />
         ))
@@ -2271,7 +2424,7 @@ function GroupBuyPurchaseCard({
             </div>
           )}
           {purchase.paymentDeadline && purchase.groupBuyStatus === "AWAITING_PAYMENT" && (
-            <p className="payment-deadline">Оплатите до {new Date(purchase.paymentDeadline).toLocaleString("ru-RU")}</p>
+            <p className="payment-deadline">Оплатите до {formatMoscowDateTime(purchase.paymentDeadline)} МСК</p>
           )}
         </div>
       )}
@@ -2281,7 +2434,7 @@ function GroupBuyPurchaseCard({
       {purchase.deliveryFrom && (
         <div className="delivery-note">
           <span>ОРИЕНТИР ПОСТАВКИ</span>
-          <b>{new Date(purchase.deliveryFrom).toLocaleDateString("ru-RU")} — {purchase.deliveryTo ? new Date(purchase.deliveryTo).toLocaleDateString("ru-RU") : "уточняется"}</b>
+          <b>{formatMoscowDate(purchase.deliveryFrom)} — {purchase.deliveryTo ? formatMoscowDate(purchase.deliveryTo) : "уточняется"}</b>
           {purchase.deliveryNote && <p>{purchase.deliveryNote}</p>}
         </div>
       )}
@@ -2337,13 +2490,17 @@ function OrderCard({
   mode: "purchases" | "sales";
   requisitesOpen: boolean;
   onToggleRequisites: () => void;
-  onAdvance: (status: "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED") => void;
+  onAdvance: (status: "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED") => Promise<void>;
   onReport: () => void;
-  onReview: (rating: number) => void;
+  onReview: (rating: number) => Promise<boolean>;
   onToast: (message: string) => void;
 }) {
   const [ratingOpen, setRatingOpen] = useState(false);
   const [selectedRating, setSelectedRating] = useState(0);
+  const [actionSaving, setActionSaving] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const actionSavingRef = useRef(false);
+  const reviewSavingRef = useRef(false);
   const steps = [
     { status: "AWAITING_PAYMENT", label: "Ожидает оплаты", text: "Покупатель переводит деньги продавцу" },
     { status: "PAID", label: "Оплачено", text: "Продавец проверяет поступление" },
@@ -2375,7 +2532,7 @@ function OrderCard({
       <div className="order-head">
         <div><span className="order-number">ЗАКАЗ #{order.id}</span><strong>{statusLabel}</strong></div>
         <div className="order-head-actions">
-          <span>{new Date(order.createdAt).toLocaleDateString("ru-RU")}</span>
+          <span>{formatMoscowDate(order.createdAt)}</span>
           {mode === "purchases" && order.status !== "CANCELLED" && (
             <button className="report-order-button" onClick={onReport} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
           )}
@@ -2388,7 +2545,7 @@ function OrderCard({
         />
         <div>
           <b>{order.productTitle}</b>
-          <span>{order.storeName}</span>
+          <span>{order.storeName} · {order.quantity} шт.</span>
           <strong>{formatPrice(order.buyerPriceKopecks)}</strong>
         </div>
       </div>
@@ -2439,9 +2596,43 @@ function OrderCard({
           <span>Комиссия после завершения: <b>{formatPrice(order.commissionKopecks)}</b></span>
         </div>
       )}
-      {action && <button className="main-action" onClick={() => onAdvance(action.status)}>{action.label}</button>}
+      {action && (
+        <button
+          className="main-action"
+          disabled={actionSaving}
+          onClick={async () => {
+            if (actionSavingRef.current) return;
+            actionSavingRef.current = true;
+            setActionSaving(true);
+            try {
+              await onAdvance(action.status);
+            } finally {
+              actionSavingRef.current = false;
+              setActionSaving(false);
+            }
+          }}
+        >
+          {actionSaving ? "Обновляем…" : action.label}
+        </button>
+      )}
       {["AWAITING_PAYMENT", "PAID"].includes(order.status) && (
-        <button className="outline-action cancel-order-action" onClick={() => onAdvance("CANCELLED")}>Отменить заказ</button>
+        <button
+          className="outline-action cancel-order-action"
+          disabled={actionSaving}
+          onClick={async () => {
+            if (actionSavingRef.current) return;
+            actionSavingRef.current = true;
+            setActionSaving(true);
+            try {
+              await onAdvance("CANCELLED");
+            } finally {
+              actionSavingRef.current = false;
+              setActionSaving(false);
+            }
+          }}
+        >
+          Отменить заказ
+        </button>
       )}
       {mode === "purchases" && order.status === "COMPLETED" && (
         <div className="order-rating">
@@ -2464,7 +2655,26 @@ function OrderCard({
                   </button>
                 ))}
               </div>
-              <button className="main-action" disabled={!selectedRating} onClick={() => onReview(selectedRating)}>Подтвердить</button>
+              <button
+                type="button"
+                className="main-action"
+                disabled={!selectedRating || reviewSaving}
+                onClick={async () => {
+                  if (!selectedRating || reviewSavingRef.current) return;
+                  reviewSavingRef.current = true;
+                  setReviewSaving(true);
+                  try {
+                    if (await onReview(selectedRating)) {
+                      setRatingOpen(false);
+                    }
+                  } finally {
+                    reviewSavingRef.current = false;
+                    setReviewSaving(false);
+                  }
+                }}
+              >
+                {reviewSaving ? "Сохраняем…" : "Подтвердить"}
+              </button>
             </div>
           ) : (
             <button className="outline-action" onClick={() => setRatingOpen(true)}>
@@ -2483,6 +2693,7 @@ function CreateListing({
   club,
   categories,
   request,
+  onStoreImageChanged,
   onCreated,
 }: {
   profile: Profile;
@@ -2490,20 +2701,31 @@ function CreateListing({
   club: Club | null;
   categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onStoreImageChanged: () => Promise<void>;
   onCreated: () => Promise<void>;
 }) {
   const [kind, setKind] = useState<"regular" | "group">("regular");
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [storeFile, setStoreFile] = useState<File | null>(null);
+  const [storePreview, setStorePreview] = useState("");
   const [price, setPrice] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [store, setStore] = useState<SellerStore | null>(null);
   const [storeLoading, setStoreLoading] = useState(true);
+  const [storeImageSaving, setStoreImageSaving] = useState(false);
 
   useEffect(
     () => () => previews.forEach((preview) => URL.revokeObjectURL(preview)),
     [previews],
+  );
+
+  useEffect(
+    () => () => {
+      if (storePreview) URL.revokeObjectURL(storePreview);
+    },
+    [storePreview],
   );
 
   useEffect(() => {
@@ -2532,14 +2754,44 @@ function CreateListing({
   if (profile.sellerBlocked) return <EmptySection title="Публикация недоступна" text="Один из комиссионных долгов достиг лимита. Реквизиты и суммы указаны в окне оплаты." />;
   const activeClub = club;
 
+  async function replaceStoreImage(file: File) {
+    if (!store) return;
+    setStoreImageSaving(true);
+    setError("");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const uploaded = await request<{ url: string }>("/uploads", {
+        method: "POST",
+        body,
+      });
+      await request(`/stores/${store.id}/image`, {
+        method: "PUT",
+        body: JSON.stringify({ imageUrl: uploaded.url }),
+      });
+      setStore((current) =>
+        current ? { ...current, imageUrl: uploaded.url } : current,
+      );
+      await onStoreImageChanged();
+    } catch (imageError) {
+      setError(
+        imageError instanceof Error
+          ? imageError.message
+          : "Не удалось обновить фотографию магазина",
+      );
+    } finally {
+      setStoreImageSaving(false);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!files.length) {
       setError("Добавьте хотя бы одну фотографию.");
       return;
     }
-    if (!categories.length) {
-      setError("Супер-админ ещё не создал категории.");
+    if (!store && !storeFile) {
+      setError("Добавьте отдельную фотографию магазина.");
       return;
     }
     setSaving(true);
@@ -2555,12 +2807,19 @@ function CreateListing({
       );
 
       if (!store) {
+        const storeImageBody = new FormData();
+        storeImageBody.append("file", storeFile as File);
+        const storeImage = await request<{ url: string }>("/uploads", {
+          method: "POST",
+          body: storeImageBody,
+        });
         await request("/stores", {
           method: "POST",
           body: JSON.stringify({
             groupId: activeClub.id,
             name: String(form.get("storeName")),
             description: "",
+            imageUrl: storeImage.url,
             paymentDetails: String(form.get("paymentDetails")),
           }),
         });
@@ -2573,6 +2832,7 @@ function CreateListing({
           groupId: activeClub.id,
           title: String(form.get("title")),
           description: String(form.get("description")),
+          specifications: String(form.get("specifications")),
           category: String(form.get("category")),
           stock: Number(form.get("stock")),
           sellerPriceKopecks: rubles * 100,
@@ -2617,11 +2877,52 @@ function CreateListing({
             <span>ВАШ МАГАЗИН В ЭТОМ КЛУБЕ</span>
             <b>{store.name}</b>
             <p>Все новые объявления автоматически публикуются в этом магазине.</p>
+            <label className={`store-image-upload existing-store-image ${store.imageUrl ? "has-preview" : ""}`}>
+              {store.imageUrl ? (
+                // Existing store image keeps its original proportions.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={store.imageUrl} alt={`Обложка магазина ${store.name}`} />
+              ) : (
+                <div><ImagePlus size={23} /><b>Добавить отдельное фото магазина</b><small>Старое фото товара больше не используется как обложка</small></div>
+              )}
+              <em>{storeImageSaving ? "Загружаем…" : store.imageUrl ? "Нажмите, чтобы заменить" : "Выбрать изображение"}</em>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={storeImageSaving}
+                onChange={(event) => {
+                  const nextFile = event.target.files?.[0];
+                  if (nextFile) void replaceStoreImage(nextFile);
+                  event.target.value = "";
+                }}
+              />
+            </label>
           </div>
         ) : (
           <div className="store-setup-fields">
             <div><span>ПЕРВЫЙ ТОВАР В КЛУБЕ</span><b>Создайте один магазин</b><p>В этом клубе у вас будет только один магазин. В другом клубе можно открыть отдельный.</p></div>
             <label><span>Название магазина</span><input name="storeName" required placeholder="Например, Garage 54" /></label>
+            <label className={`store-image-upload ${storePreview ? "has-preview" : ""}`}>
+              <span>Отдельное фото магазина</span>
+              {storePreview ? (
+                // Local preview preserves the source image proportions.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={storePreview} alt="Предпросмотр фотографии магазина" />
+              ) : (
+                <div><ImagePlus size={23} /><b>Загрузить обложку магазина</b><small>Не используется фото товара · JPG, PNG или WEBP</small></div>
+              )}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                required
+                onChange={(event) => {
+                  if (storePreview) URL.revokeObjectURL(storePreview);
+                  const nextFile = event.target.files?.[0] || null;
+                  setStoreFile(nextFile);
+                  setStorePreview(nextFile ? URL.createObjectURL(nextFile) : "");
+                }}
+              />
+            </label>
             <label><span>Общие реквизиты продавца</span><input name="paymentDetails" required placeholder="Один номер карты, СБП или пояснение" /></label>
           </div>
         )}
@@ -2653,15 +2954,25 @@ function CreateListing({
         <label><span>Название товара</span><input name="title" required placeholder="Например, кованые диски R20" /></label>
         <label>
           <span>Категория</span>
-          <select name="category" required defaultValue="">
-            <option value="" disabled>{categories.length ? "Выберите категорию" : "Категории ещё не созданы"}</option>
-            {categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
-          </select>
+          <input
+            name="category"
+            list="create-category-options"
+            maxLength={80}
+            required
+            placeholder="Выберите или впишите новую"
+          />
+          <datalist id="create-category-options">
+            {categories.map((category) => (
+              <option key={category.id} value={category.name} />
+            ))}
+          </datalist>
+          <small>Если такой категории ещё нет, она создастся автоматически.</small>
         </label>
         <label><span>Описание</span><textarea name="description" required rows={4} placeholder="Комплектация, состояние, совместимость…" /></label>
+        <label><span>Характеристики товара</span><textarea name="specifications" rows={4} placeholder="Артикул, производитель, размеры, материал, совместимость…" /></label>
         <div className="form-row">
           <label><span>Цена продавца</span><div className="input-suffix"><input value={price} onChange={(event) => setPrice(event.target.value)} inputMode="numeric" required /><b>₽</b></div></label>
-          <label><span>Количество</span><input name="stock" type="number" min="1" defaultValue="1" required /></label>
+          <label><span>Количество товара, шт.</span><input name="stock" type="number" min="1" defaultValue="1" required /></label>
         </div>
         <div className="price-preview">
           <span>Конечная цена для покупателя</span>
@@ -2678,7 +2989,7 @@ function CreateListing({
         )}
         <label className="checkbox-label"><input type="checkbox" required /><span>Подтверждаю достоверность объявления</span></label>
         {error && <p className="form-error">{error}</p>}
-        <button className="main-action" type="submit" disabled={saving || storeLoading || !categories.length}>{saving ? "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
+        <button className="main-action" type="submit" disabled={saving || storeLoading}>{saving ? "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
       </form>
     </section>
   );
@@ -3175,18 +3486,13 @@ function GroupBuyAdminCard({
 }
 
 function SuperAdmin({
-  categories,
   request,
-  onCategoriesChanged,
   onToast,
 }: {
-  categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onCategoriesChanged: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"settings" | "categories" | "groups" | "debts" | "users" | "moderation">("settings");
-  const [name, setName] = useState("");
+  const [tab, setTab] = useState<"settings" | "groups" | "debts" | "users" | "moderation">("settings");
   const [saving, setSaving] = useState(false);
   const [adminGroups, setAdminGroups] = useState<AdminGroup[]>([]);
   const [debts, setDebts] = useState<Record<string, unknown>[]>([]);
@@ -3239,7 +3545,6 @@ function SuperAdmin({
       <div className="page-title"><span className="section-kicker"><Crown size={13} /> PLATFORM OWNER</span><h1>Супер-админ</h1><p>Только реальные данные из Базы данных</p></div>
       <div className="admin-tabs">
         <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Платформа</button>
-        <button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Категории</button>
         <button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}>Группы и комиссии</button>
         <button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}>Долги</button>
         <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Пользователи</button>
@@ -3278,37 +3583,6 @@ function SuperAdmin({
           <label><span>Реквизиты супер-администратора</span><textarea rows={4} value={globalSettings.paymentDetails} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentDetails: event.target.value }))} placeholder="СБП, номер карты, получатель и назначение платежа" required /></label>
           <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
         </form>
-      )}
-      {tab === "categories" && (
-        <div className="settings-card">
-          <h2>Категории товаров</h2>
-          <p className="settings-hint">Категории не создаются автоматически. Продавец сможет выбрать только значения из этого списка.</p>
-          <form
-            className="category-create"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              if (!name.trim()) return;
-              setSaving(true);
-              try {
-                await request("/admin/categories", { method: "POST", body: JSON.stringify({ name }) });
-                setName("");
-                await onCategoriesChanged();
-                onToast("Категория добавлена");
-              } finally {
-                setSaving(false);
-              }
-            }}
-          >
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Название категории" />
-            <button className="main-action" disabled={saving}>{saving ? "Добавляем…" : "Добавить"}</button>
-          </form>
-          <div className="category-admin-list">
-            {categories.map((category) => (
-              <div key={category.id}><span>{category.name}</span><button aria-label={`Удалить ${category.name}`} onClick={async () => { await request(`/admin/categories/${category.id}`, { method: "DELETE" }); await onCategoriesChanged(); onToast("Категория удалена"); }}><Trash2 size={16} /></button></div>
-            ))}
-            {!categories.length && <div className="empty-inline">Категорий пока нет.</div>}
-          </div>
-        </div>
       )}
       {tab === "groups" && (
         <div className="admin-table-card">
@@ -3434,7 +3708,7 @@ function SuperAdmin({
               <article className={`report-review-card ${pending ? "pending" : ""}`} key={reportId}>
                 <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}{report.reported_username ? ` · @${String(report.reported_username)}` : ""}</b><small>Telegram ID: {String(report.reported_telegram_id)} · Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
                 <p>{String(report.reason)}</p>
-                <small>От: {String(report.reporter_name || report.reporter_telegram_id)}{report.reporter_username ? ` · @${String(report.reporter_username)}` : ""} · Telegram ID: {String(report.reporter_telegram_id)} · {new Date(String(report.created_at)).toLocaleString("ru-RU")}</small>
+                <small>От: {String(report.reporter_name || report.reporter_telegram_id)}{report.reporter_username ? ` · @${String(report.reporter_username)}` : ""} · Telegram ID: {String(report.reporter_telegram_id)} · {formatMoscowDateTime(String(report.created_at))} МСК</small>
                 {pending && (
                   <div className="report-review-actions">
                     <button
@@ -3660,7 +3934,7 @@ function NotificationsModal({
               }}
             >
               <i><Bell size={16} /></i>
-              <span><b>{item.title}</b><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString("ru-RU")}</small></span>
+              <span><b>{item.title}</b><p>{item.body}</p><small>{formatMoscowDateTime(item.createdAt)} МСК</small></span>
             </button>
           ))}
         </div>

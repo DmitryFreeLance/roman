@@ -37,5 +37,10 @@ class ImageStorageServiceTest {
                     .satisfies(file -> assertThat(Files.readAllBytes(file))
                             .containsExactly(1, 2, 3, 4));
         }
+
+        assertThat(storage.clearAll()).isEqualTo(1);
+        try (var files = Files.list(uploadDirectory)) {
+            assertThat(files.toList()).isEmpty();
+        }
     }
 }

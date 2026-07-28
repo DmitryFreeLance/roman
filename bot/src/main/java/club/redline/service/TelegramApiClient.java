@@ -71,6 +71,51 @@ public class TelegramApiClient {
         ));
     }
 
+    public void sendClearConfirmation(long chatId) {
+        call("sendMessage", Map.of(
+                "chat_id", chatId,
+                "text", """
+                        <b>Полная очистка данных REDLINE</b>
+
+                        Будут удалены магазины, объявления, групповые закупки,
+                        заказы, «Мои покупки», отзывы, жалобы, уведомления,
+                        комиссионные операции и загруженные фотографии.
+
+                        Клубы, пользователи, супер-администраторы и базовые
+                        категории сохранятся. Объявления в темах «Магазин»
+                        также будут удалены.
+                        """,
+                "parse_mode", "HTML",
+                "reply_markup", Map.of(
+                        "inline_keyboard", List.of(List.of(
+                                Map.of(
+                                        "text", "Удалить все данные",
+                                        "callback_data", "clear_marketplace_confirm"
+                                ),
+                                Map.of(
+                                        "text", "Отмена",
+                                        "callback_data", "clear_marketplace_cancel"
+                                )
+                        ))
+                )
+        ));
+    }
+
+    public void answerCallbackQuery(String callbackQueryId, String text) {
+        call("answerCallbackQuery", Map.of(
+                "callback_query_id", callbackQueryId,
+                "text", text
+        ));
+    }
+
+    public void removeInlineKeyboard(long chatId, long messageId) {
+        call("editMessageReplyMarkup", Map.of(
+                "chat_id", chatId,
+                "message_id", messageId,
+                "reply_markup", Map.of("inline_keyboard", List.of())
+        ));
+    }
+
     public int createShopTopic(long groupId) {
         JsonNode result = call("createForumTopic", Map.of(
                 "chat_id", groupId,
@@ -78,6 +123,18 @@ public class TelegramApiClient {
                 "icon_color", 16478047
         ));
         return result.path("message_thread_id").asInt();
+    }
+
+    public boolean deleteForumTopic(long groupId, int threadId) {
+        try {
+            call("deleteForumTopic", Map.of(
+                    "chat_id", groupId,
+                    "message_thread_id", threadId
+            ));
+            return true;
+        } catch (RuntimeException error) {
+            return false;
+        }
     }
 
     public void publishProduct(long groupId, int threadId, long productId, String title,

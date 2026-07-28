@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Oswald } from "next/font/google";
-import { TelegramScript } from "./telegram-script";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -47,9 +46,13 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ru">
+    <html lang="ru" suppressHydrationWarning>
       <body className={`${manrope.variable} ${oswald.variable}`}>
-        <TelegramScript />
+        <script
+          src="https://telegram.org/js/telegram-web-app.js?63"
+          data-redline-telegram="true"
+          async
+        />
         {children}
       </body>
     </html>
