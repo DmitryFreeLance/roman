@@ -13,6 +13,7 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.web.client.RestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MarketplaceServiceSqliteTest {
     private final SingleConnectionDataSource dataSource =
@@ -264,6 +265,34 @@ class MarketplaceServiceSqliteTest {
                     assertThat(String.valueOf(row.get("color_variants")))
                             .contains("\"black\"", "\"blue\"");
                 });
+        long colorOrderId = marketplace.createOrder(
+                secondBuyerId, regularProductId, 2, "color-order", "black"
+        );
+        assertThatThrownBy(() -> marketplace.createOrder(
+                firstBuyerId, regularProductId, 1, "color-order-overflow", "black"
+        )).hasMessageContaining("Недостаточно выбранного цвета");
+        assertThat(marketplace.catalog(-100123L))
+                .filteredOn(row ->
+                        ((Number) row.get("id")).longValue() == regularProductId)
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("stock")).intValue()).isEqualTo(2);
+                    assertThat(String.valueOf(row.get("color_variants")))
+                            .contains("\"key\":\"black\"", "\"stock\":0",
+                                    "\"key\":\"blue\"", "\"stock\":2");
+                });
+        marketplace.advanceOrder(
+                colorOrderId, secondBuyerId, "CANCELLED"
+        );
+        assertThat(marketplace.catalog(-100123L))
+                .filteredOn(row ->
+                        ((Number) row.get("id")).longValue() == regularProductId)
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("stock")).intValue()).isEqualTo(4);
+                    assertThat(String.valueOf(row.get("color_variants")))
+                            .contains("\"key\":\"black\"", "\"stock\":2");
+                });
         assertThat(marketplace.categories())
                 .anySatisfy(row -> assertThat(row.get("name")).isEqualTo("Track brakes"));
         assertThat(jdbc.queryForObject(
@@ -393,7 +422,7 @@ class MarketplaceServiceSqliteTest {
         MarketplaceService.ClearResult cleared = marketplace.clearMarketplaceData();
         assertThat(cleared.stores()).isEqualTo(1);
         assertThat(cleared.products()).isEqualTo(2);
-        assertThat(cleared.orders()).isEqualTo(3);
+        assertThat(cleared.orders()).isEqualTo(4);
         assertThat(cleared.groupBuys()).isEqualTo(1);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM telegram_groups", Integer.class

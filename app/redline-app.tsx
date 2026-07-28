@@ -145,6 +145,7 @@ type ProductColorVariant = {
   name: string;
   hex: string;
   images: string[];
+  stock?: number;
 };
 
 type CartItem = {
@@ -1087,6 +1088,7 @@ export function RedlineApp() {
     const selectedColor = product.colorVariants.find(
       (variant) => variant.key === selectedColorKey,
     );
+    const availableStock = selectedColor?.stock ?? product.stock;
     const key = `${selectedClub.id}:${product.id}:${selectedColorKey || "default"}`;
     setCart((items) => {
       const existing = items.find((item) => item.key === key);
@@ -1095,8 +1097,11 @@ export function RedlineApp() {
           item.key === key
             ? {
                 ...item,
-                quantity: Math.min(product.stock, item.quantity + quantity),
-                stock: product.stock,
+                quantity: Math.min(
+                  availableStock,
+                  item.quantity + quantity,
+                ),
+                stock: availableStock,
                 unitPriceKopecks: product.buyerPriceKopecks,
               }
             : item,
@@ -1112,8 +1117,8 @@ export function RedlineApp() {
           storeId: product.storeId,
           storeName: product.storeName,
           unitPriceKopecks: product.buyerPriceKopecks,
-          quantity: Math.min(product.stock, quantity),
-          stock: product.stock,
+          quantity: Math.min(availableStock, quantity),
+          stock: availableStock,
           image: selectedColor?.images[0] || product.images[0],
           selectedColorKey: selectedColor?.key,
           selectedColorName: selectedColor?.name,
@@ -1417,7 +1422,6 @@ export function RedlineApp() {
             favorites={favorites}
             onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
-            onDiscuss={setDiscussionProduct}
             onReserve={reserve}
             onNavigate={navigate}
           />
@@ -1431,7 +1435,6 @@ export function RedlineApp() {
             favorites={favorites}
             onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
-            onDiscuss={setDiscussionProduct}
             onReserve={reserve}
           />
         )}
@@ -1773,7 +1776,6 @@ function Market({
   favorites,
   onFavorite,
   onOpen,
-  onDiscuss,
   onReserve,
   onNavigate,
 }: {
@@ -1795,7 +1797,6 @@ function Market({
   favorites: number[];
   onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
-  onDiscuss: (product: Product) => void;
   onReserve: (product: Product, selectedColorKey?: string) => Promise<void>;
   onNavigate: (screen: Screen) => void;
 }) {
@@ -1909,7 +1910,6 @@ function Market({
                     favorite={favorites.includes(product.id)}
                     onFavorite={() => onFavorite(product.id)}
                     onOpen={() => onOpen(product)}
-                    onDiscuss={() => onDiscuss(product)}
                     onReserve={() =>
                       product.colorVariants.length
                         ? onOpen(product)
@@ -1958,14 +1958,12 @@ function ProductCard({
   favorite,
   onFavorite,
   onOpen,
-  onDiscuss,
   onReserve,
 }: {
   product: Product;
   favorite: boolean;
   onFavorite: () => void;
   onOpen: () => void;
-  onDiscuss: () => void;
   onReserve: () => void;
 }) {
   const progress = product.targetCount
@@ -2010,9 +2008,6 @@ function ProductCard({
           </div>
           <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
           <div className="product-card-actions">
-            <button className="secondary-card-action" onClick={onDiscuss}>
-              <MessageCircle size={14} /> Обсудить
-            </button>
             <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
           </div>
         </div>
@@ -2049,6 +2044,7 @@ function ProductModal({
   const activeColor = product.colorVariants.find(
     (variant) => variant.key === activeColorKey,
   );
+  const availableStock = activeColor?.stock ?? product.stock;
   const images = (activeColor?.images || product.images).filter(Boolean);
   const selectedImage = images[activeImage];
 
@@ -2096,7 +2092,7 @@ function ProductModal({
         )}
         <div className="modal-body">
           <span className="seller-line"><BadgeCheck size={13} />{product.storeName}</span>
-          <span className="availability-chip">● В наличии · {product.stock} шт.</span>
+          <span className="availability-chip">● В наличии · {availableStock} шт.</span>
           <h2>{product.title}</h2>
           <div className="rating-line modal-rating">
             <div>
@@ -2123,6 +2119,7 @@ function ProductModal({
                     onClick={() => {
                       setActiveColorKey(variant.key);
                       setActiveImage(0);
+                      setQuantity(1);
                     }}
                     aria-label={`Выбрать цвет ${variant.name}`}
                     title={variant.name}
@@ -2155,17 +2152,17 @@ function ProductModal({
           </div>
           {product.kind === "regular" && (
             <div className="quantity-picker">
-              <div><span>Количество</span><small>Доступно: {product.stock} шт.</small></div>
+              <div><span>Количество</span><small>Доступно: {availableStock} шт.</small></div>
               <div>
                 <button type="button" onClick={() => setQuantity((current) => Math.max(1, current - 1))} disabled={quantity <= 1} aria-label="Уменьшить количество"><Minus size={17} /></button>
                 <b>{quantity}</b>
-                <button type="button" onClick={() => setQuantity((current) => Math.min(product.stock, current + 1))} disabled={quantity >= product.stock} aria-label="Увеличить количество"><Plus size={17} /></button>
+                <button type="button" onClick={() => setQuantity((current) => Math.min(availableStock, current + 1))} disabled={quantity >= availableStock} aria-label="Увеличить количество"><Plus size={17} /></button>
               </div>
             </div>
           )}
           <button
             className="main-action product-buy-action"
-            disabled={product.stock < 1}
+            disabled={availableStock < 1}
             onClick={
               product.kind === "group"
                 ? () => onReserve(activeColor?.key)
@@ -2765,7 +2762,6 @@ function SimpleList({
   favorites,
   onFavorite,
   onOpen,
-  onDiscuss,
   onReserve,
 }: {
   title: string;
@@ -2774,7 +2770,6 @@ function SimpleList({
   favorites: number[];
   onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
-  onDiscuss: (product: Product) => void;
   onReserve: (product: Product, selectedColorKey?: string) => Promise<void>;
 }) {
   return (
@@ -2789,7 +2784,6 @@ function SimpleList({
               favorite={favorites.includes(product.id)}
               onFavorite={() => onFavorite(product.id)}
               onOpen={() => onOpen(product)}
-              onDiscuss={() => onDiscuss(product)}
               onReserve={() =>
                 product.colorVariants.length
                   ? onOpen(product)
@@ -2981,6 +2975,21 @@ function EditListingModal({
   const [previews, setPreviews] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [variantStocks, setVariantStocks] = useState<Record<string, string>>(
+    () => {
+      const variantCount = product.colorVariants.length;
+      return Object.fromEntries(
+        product.colorVariants.map((variant, index) => [
+          variant.key,
+          String(
+            variant.stock ??
+              Math.floor(product.stock / Math.max(1, variantCount)) +
+                (index < product.stock % Math.max(1, variantCount) ? 1 : 0),
+          ),
+        ]),
+      );
+    },
+  );
 
   useEffect(
     () => () => previews.forEach((preview) => URL.revokeObjectURL(preview)),
@@ -3007,6 +3016,16 @@ function EditListingModal({
         );
         images = uploaded.map((item) => item.url);
       }
+      const updatedColorVariants = product.colorVariants.map((variant) => ({
+        ...variant,
+        stock: Math.max(0, Number(variantStocks[variant.key]) || 0),
+      }));
+      const stock = updatedColorVariants.length
+        ? updatedColorVariants.reduce(
+            (total, variant) => total + (variant.stock || 0),
+            0,
+          )
+        : Number(form.get("stock"));
       await request(`/products/${product.id}`, {
         method: "PUT",
         body: JSON.stringify({
@@ -3014,10 +3033,10 @@ function EditListingModal({
           description: String(form.get("description")),
           specifications: String(form.get("specifications")),
           category: String(form.get("category")),
-          stock: Number(form.get("stock")),
+          stock,
           sellerPriceKopecks: Math.round(Number(form.get("price")) * 100),
           imageUrlsJson: JSON.stringify(images),
-          colorVariantsJson: JSON.stringify(product.colorVariants),
+          colorVariantsJson: JSON.stringify(updatedColorVariants),
         }),
       });
       await onSaved();
@@ -3039,15 +3058,59 @@ function EditListingModal({
         <button className="modal-close" onClick={onClose} aria-label="Закрыть"><X /></button>
         <div className="page-title"><span className="section-kicker">EDIT</span><h1>Редактировать</h1></div>
         <form className="listing-form" onSubmit={submit}>
-          <label className={`upload-area ${displayImages.length ? "has-preview" : ""}`}>
-            <div className={`upload-preview-grid ${displayImages.length === 1 ? "single-photo" : ""}`}>
-              {displayImages.map((preview, index) => (
-                // Existing URLs and local blob previews are user-selected images.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={`${preview}-${index}`} src={preview} alt={`Фото ${index + 1}`} />
+          {product.colorVariants.length ? (
+            <div className="color-variant-editor edit-color-variants">
+              <div className="color-picker-heading">
+                <span>Остатки по цветам</span>
+                <small>Фотографии и количество каждого цвета</small>
+              </div>
+              {product.colorVariants.map((variant) => (
+                <div className="color-photo-field" key={variant.key}>
+                  <div className="color-photo-title">
+                    <i style={{ backgroundColor: variant.hex }} />
+                    <div>
+                      <b>{variant.name}</b>
+                      <span>{variant.images.length} фото</span>
+                    </div>
+                  </div>
+                  <div className={`upload-area compact has-preview`}>
+                    <div className={`upload-preview-grid ${variant.images.length === 1 ? "single-photo" : ""}`}>
+                      {variant.images.map((image, index) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={`${image}-${index}`} src={image} alt={`${variant.name}, фото ${index + 1}`} />
+                      ))}
+                    </div>
+                  </div>
+                  <label className="color-stock-field">
+                    <span>Количество цвета «{variant.name}», шт.</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={variantStocks[variant.key] || "0"}
+                      onChange={(event) =>
+                        setVariantStocks((items) => ({
+                          ...items,
+                          [variant.key]: event.target.value,
+                        }))
+                      }
+                      required
+                    />
+                  </label>
+                </div>
               ))}
             </div>
-            {product.colorVariants.length === 0 && (
+          ) : (
+            <>
+              <label className={`upload-area ${displayImages.length ? "has-preview" : ""}`}>
+                <div className={`upload-preview-grid ${displayImages.length === 1 ? "single-photo" : ""}`}>
+                  {displayImages.map((preview, index) => (
+                    // Existing URLs and local blob previews are user-selected images.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img key={`${preview}-${index}`} src={preview} alt={`Фото ${index + 1}`} />
+                  ))}
+                </div>
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
@@ -3059,13 +3122,10 @@ function EditListingModal({
                   setPreviews(nextFiles.map((file) => URL.createObjectURL(file)));
                 }}
               />
-            )}
-          </label>
-          <p className="upload-caption">
-            {product.colorVariants.length
-              ? "Фотографии распределены по цветам и сохранятся без изменений."
-              : "Нажмите на фото, чтобы заменить весь набор."}
-          </p>
+              </label>
+              <p className="upload-caption">Нажмите на фото, чтобы заменить весь набор.</p>
+            </>
+          )}
           <label><span>Название товара</span><input name="title" defaultValue={product.title} required /></label>
           <label>
             <span>Категория</span>
@@ -3087,7 +3147,9 @@ function EditListingModal({
           <label><span>Характеристики</span><textarea name="specifications" defaultValue={product.specifications} rows={4} placeholder="Артикул, производитель, размеры, совместимость…" /></label>
           <div className="form-row">
             <label><span>Цена продавца, ₽</span><input name="price" type="number" min="1" step="1" defaultValue={Math.round(product.sellerPriceKopecks / 100)} required /></label>
-            <label><span>Количество</span><input name="stock" type="number" min="1" defaultValue={product.stock} required /></label>
+            {!product.colorVariants.length && (
+              <label><span>Количество</span><input name="stock" type="number" min="1" defaultValue={product.stock} required /></label>
+            )}
           </div>
           {error && <p className="form-error">{error}</p>}
           <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить"}</button>
@@ -3783,6 +3845,7 @@ function CreateListing({
   const [selectedColorKeys, setSelectedColorKeys] = useState<string[]>([]);
   const [colorFiles, setColorFiles] = useState<Record<string, File[]>>({});
   const [colorPreviews, setColorPreviews] = useState<Record<string, string[]>>({});
+  const [colorStocks, setColorStocks] = useState<Record<string, string>>({});
   const colorPreviewsRef = useRef<Record<string, string[]>>({});
   const [storeFile, setStoreFile] = useState<File | null>(null);
   const [storePreview, setStorePreview] = useState("");
@@ -3890,6 +3953,13 @@ function CreateListing({
       setError("Для каждого выбранного цвета загрузите хотя бы одну фотографию.");
       return;
     }
+    if (
+      multipleColors &&
+      selectedColorKeys.some((key) => Number(colorStocks[key]) < 1)
+    ) {
+      setError("Укажите количество товара отдельно для каждого цвета.");
+      return;
+    }
     if (!store && !storeFile) {
       setError("Добавьте отдельную фотографию магазина.");
       return;
@@ -3911,6 +3981,7 @@ function CreateListing({
             selectedColorKeys.includes(color.key),
           ).map(async (color) => ({
             ...color,
+            stock: Number(colorStocks[color.key]),
             images: (
               await Promise.all((colorFiles[color.key] || []).map(uploadFile))
             ).map((item) => item.url),
@@ -3951,7 +4022,12 @@ function CreateListing({
           description: String(form.get("description")),
           specifications: String(form.get("specifications")),
           category: String(form.get("category")),
-          stock: Number(form.get("stock")),
+          stock: multipleColors
+            ? colorVariants.reduce(
+                (total, variant) => total + (variant.stock || 0),
+                0,
+              )
+            : Number(form.get("stock")),
           sellerPriceKopecks: rubles * 100,
           kind: kind === "group" ? "GROUP_BUY" : "REGULAR",
           imageUrlsJson: JSON.stringify(imageUrls),
@@ -4049,13 +4125,19 @@ function CreateListing({
             type="checkbox"
             checked={multipleColors}
             onChange={(event) => {
-              setMultipleColors(event.target.checked);
+              const enabled = event.target.checked;
+              setMultipleColors(enabled);
+              if (enabled) {
+                previews.forEach((preview) => URL.revokeObjectURL(preview));
+                setFiles([]);
+                setPreviews([]);
+              }
               setError("");
             }}
           />
           <span>
             <b>Несколько цветов</b>
-            <small>Для каждого выбранного цвета потребуются отдельные фотографии.</small>
+            <small>Для каждого цвета потребуются отдельные фотографии и количество.</small>
           </span>
         </label>
         {multipleColors ? (
@@ -4090,8 +4172,17 @@ function CreateListing({
                           delete next[color.key];
                           return next;
                         });
+                        setColorStocks((items) => {
+                          const next = { ...items };
+                          delete next[color.key];
+                          return next;
+                        });
                       } else {
                         setSelectedColorKeys((keys) => [...keys, color.key]);
+                        setColorStocks((items) => ({
+                          ...items,
+                          [color.key]: items[color.key] || "1",
+                        }));
                       }
                     }}
                     aria-pressed={selected}
@@ -4159,6 +4250,23 @@ function CreateListing({
                       }}
                     />
                   </label>
+                  <label className="color-stock-field">
+                    <span>Количество цвета «{color.name}», шт.</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputMode="numeric"
+                      value={colorStocks[color.key] || ""}
+                      onChange={(event) =>
+                        setColorStocks((items) => ({
+                          ...items,
+                          [color.key]: event.target.value,
+                        }))
+                      }
+                      required
+                    />
+                  </label>
                 </div>
               );
             })}
@@ -4213,7 +4321,9 @@ function CreateListing({
         <label><span>Характеристики товара</span><textarea name="specifications" rows={4} placeholder="Артикул, производитель, размеры, материал, совместимость…" /></label>
         <div className="form-row">
           <label><span>Цена продавца</span><div className="input-suffix"><input value={price} onChange={(event) => setPrice(event.target.value)} inputMode="numeric" required /><b>₽</b></div></label>
-          <label><span>Количество товара, шт.</span><input name="stock" type="number" min="1" defaultValue="1" required /></label>
+          {!multipleColors && (
+            <label><span>Количество товара, шт.</span><input name="stock" type="number" min="1" defaultValue="1" required /></label>
+          )}
         </div>
         <div className="price-preview">
           <span>Конечная цена для покупателя</span>

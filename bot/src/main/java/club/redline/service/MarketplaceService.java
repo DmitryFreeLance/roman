@@ -5,6 +5,8 @@ import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -198,7 +200,9 @@ public class MarketplaceService {
     public void updateSellerProduct(long sellerTelegramId, long productId,
                                     UpdateProduct input) {
         String category = ensureCategory(input.category());
-        String colorVariants = normalizeColorVariants(input.colorVariantsJson());
+        NormalizedColorVariants colorVariants = normalizeColorVariants(
+                input.colorVariantsJson(), input.stock()
+        );
         int updated = jdbc.update("""
                 UPDATE products
                 SET title = ?, description = ?, specifications = ?, category = ?, stock = ?,
@@ -209,8 +213,9 @@ public class MarketplaceService {
                 )
                 """, input.title(), input.description(),
                 input.specifications() == null ? "" : input.specifications(),
-                category, input.stock(), input.sellerPriceKopecks(), input.imageUrlsJson(),
-                colorVariants, productId, sellerTelegramId);
+                category, colorVariants.totalStock(), input.sellerPriceKopecks(),
+                input.imageUrlsJson(), colorVariants.json(), productId,
+                sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Product not found or access denied");
         }
@@ -234,7 +239,9 @@ public class MarketplaceService {
     public long createProduct(long sellerTelegramId, NewProduct input) {
         assertSellerCanTrade(sellerTelegramId, input.groupId());
         String category = ensureCategory(input.category());
-        String colorVariants = normalizeColorVariants(input.colorVariantsJson());
+        NormalizedColorVariants colorVariants = normalizeColorVariants(
+                input.colorVariantsJson(), input.stock()
+        );
         Long storeId = jdbc.queryForObject("""
                 SELECT id FROM stores WHERE seller_telegram_id = ? AND group_id = ?
                 """, Long.class, sellerTelegramId, input.groupId());
@@ -246,9 +253,9 @@ public class MarketplaceService {
                 RETURNING id
                 """, Long.class, storeId, input.groupId(), input.title(), input.description(),
                 input.specifications() == null ? "" : input.specifications(),
-                category, input.stock(),
+                category, colorVariants.totalStock(),
                 input.sellerPriceKopecks(), input.kind(),
-                input.imageUrlsJson(), colorVariants);
+                input.imageUrlsJson(), colorVariants.json());
         if ("GROUP_BUY".equals(input.kind())) {
             jdbc.update("""
                     INSERT INTO group_buys (product_id, target_count, collection_deadline)
@@ -553,18 +560,24 @@ public class MarketplaceService {
         return created;
     }
 
-    private String normalizeColorVariants(String value) {
+    private NormalizedColorVariants normalizeColorVariants(
+            String value, int fallbackTotalStock
+    ) {
         String json = value == null || value.isBlank() ? "[]" : value;
         try {
             JsonNode variants = JSON.readTree(json);
             if (!variants.isArray()) {
                 throw new IllegalArgumentException("Некорректный список цветов");
             }
-            if (variants.isEmpty()) return "[]";
+            if (variants.isEmpty()) {
+                return new NormalizedColorVariants("[]", fallbackTotalStock);
+            }
             if (variants.size() < 2 || variants.size() > 16) {
                 throw new IllegalArgumentException("Выберите от 2 до 16 цветов");
             }
             Set<String> keys = new HashSet<>();
+            int missingStocks = 0;
+            int specifiedStock = 0;
             for (JsonNode variant : variants) {
                 String key = variant.path("key").asText("").strip();
                 String name = variant.path("name").asText("").strip();
@@ -589,8 +602,33 @@ public class MarketplaceService {
                         );
                     }
                 }
+                if (variant.has("stock")) {
+                    int stock = variant.path("stock").asInt(-1);
+                    if (stock < 0 || stock > 1_000_000) {
+                        throw new IllegalArgumentException(
+                                "Количество каждого цвета должно быть от 0 до 1000000"
+                        );
+                    }
+                    specifiedStock = Math.addExact(specifiedStock, stock);
+                } else {
+                    missingStocks++;
+                }
             }
-            return JSON.writeValueAsString(variants);
+            if (missingStocks > 0) {
+                int remainder = Math.max(0, fallbackTotalStock - specifiedStock);
+                int base = remainder / missingStocks;
+                int extra = remainder % missingStocks;
+                for (JsonNode variant : variants) {
+                    if (!variant.has("stock")) {
+                        int stock = base + (extra-- > 0 ? 1 : 0);
+                        ((ObjectNode) variant).put("stock", stock);
+                        specifiedStock = Math.addExact(specifiedStock, stock);
+                    }
+                }
+            }
+            return new NormalizedColorVariants(
+                    JSON.writeValueAsString(variants), specifiedStock
+            );
         } catch (JsonProcessingException error) {
             throw new IllegalArgumentException("Некорректный список цветов");
         }
@@ -612,13 +650,64 @@ public class MarketplaceService {
                 if (variant.path("key").asText().equals(normalizedKey)) {
                     return new ProductColor(
                             normalizedKey,
-                            variant.path("name").asText()
+                            variant.path("name").asText(),
+                            variant.has("stock")
+                                    ? variant.path("stock").asInt(-1)
+                                    : -1
                     );
                 }
             }
             throw new IllegalArgumentException("Выберите доступный цвет товара");
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("Не удалось прочитать цвета товара");
+        }
+    }
+
+    private int colorStock(Object variantsValue, int fallbackTotalStock, String key) {
+        String normalized = normalizeColorVariants(
+                variantsValue == null ? "[]" : String.valueOf(variantsValue),
+                fallbackTotalStock
+        ).json();
+        try {
+            for (JsonNode variant : JSON.readTree(normalized)) {
+                if (variant.path("key").asText().equals(key)) {
+                    return variant.path("stock").asInt(0);
+                }
+            }
+            throw new IllegalArgumentException("Выберите доступный цвет товара");
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Не удалось прочитать остатки цветов");
+        }
+    }
+
+    private String changeColorStock(Object variantsValue, int fallbackTotalStock,
+                                    String key, int delta) {
+        String normalized = normalizeColorVariants(
+                variantsValue == null ? "[]" : String.valueOf(variantsValue),
+                fallbackTotalStock
+        ).json();
+        try {
+            JsonNode parsed = JSON.readTree(normalized);
+            if (!(parsed instanceof ArrayNode variants)) {
+                throw new IllegalStateException("Не удалось прочитать остатки цветов");
+            }
+            for (JsonNode variant : variants) {
+                if (variant.path("key").asText().equals(key)) {
+                    int updated = Math.addExact(variant.path("stock").asInt(0), delta);
+                    if (updated < 0 || updated > 1_000_000) {
+                        throw new IllegalStateException(
+                                delta < 0
+                                        ? "Недостаточно выбранного цвета"
+                                        : "Некорректный остаток выбранного цвета"
+                        );
+                    }
+                    ((ObjectNode) variant).put("stock", updated);
+                    return JSON.writeValueAsString(variants);
+                }
+            }
+            throw new IllegalArgumentException("Выберите доступный цвет товара");
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Не удалось обновить остаток цвета");
         }
     }
 
@@ -647,6 +736,27 @@ public class MarketplaceService {
         ProductColor selectedColor = selectedColor(
                 groupBuy.get("color_variants"), selectedColorKey
         );
+        Integer existingReservation = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM group_buy_reservations
+                WHERE group_buy_id = ? AND buyer_telegram_id = ?
+                  AND status <> 'CANCELLED'
+                """, Integer.class, groupBuyId, buyerTelegramId);
+        if (selectedColor != null
+                && (existingReservation == null || existingReservation == 0)) {
+            int available = colorStock(
+                    groupBuy.get("color_variants"),
+                    ((Number) groupBuy.get("stock")).intValue(),
+                    selectedColor.key()
+            );
+            Integer reservedForColor = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM group_buy_reservations
+                    WHERE group_buy_id = ? AND selected_color_key = ?
+                      AND status <> 'CANCELLED'
+                    """, Integer.class, groupBuyId, selectedColor.key());
+            if (reservedForColor != null && reservedForColor >= available) {
+                throw new IllegalStateException("Выбранный цвет закончился");
+            }
+        }
         int inserted = jdbc.update("""
                 INSERT INTO group_buy_reservations
                   (group_buy_id, buyer_telegram_id, contact_phone,
@@ -956,6 +1066,16 @@ public class MarketplaceService {
                 product.get("color_variants"), selectedColorKey
         );
         int stock = ((Number) product.get("stock")).intValue();
+        int selectedStock = selectedColor == null
+                ? stock
+                : colorStock(
+                        product.get("color_variants"), stock, selectedColor.key()
+                );
+        if (selectedStock < quantity) {
+            throw new IllegalStateException(
+                    "Недостаточно выбранного цвета: доступно " + selectedStock
+            );
+        }
         if (stock < quantity) {
             throw new IllegalStateException("Недостаточно товара: доступно " + stock);
         }
@@ -988,10 +1108,24 @@ public class MarketplaceService {
                     """, Long.class, buyerTelegramId, clientRequestId);
         }
         long orderId = insertedOrderIds.getFirst();
-        int stockUpdated = jdbc.update("""
-                UPDATE products SET stock = stock - ?
-                WHERE id = ? AND stock >= ?
-                """, quantity, productId, quantity);
+        int stockUpdated;
+        if (selectedColor == null) {
+            stockUpdated = jdbc.update("""
+                    UPDATE products SET stock = stock - ?
+                    WHERE id = ? AND stock >= ?
+                    """, quantity, productId, quantity);
+        } else {
+            String updatedVariants = changeColorStock(
+                    product.get("color_variants"), stock,
+                    selectedColor.key(), -quantity
+            );
+            stockUpdated = jdbc.update("""
+                    UPDATE products
+                    SET stock = stock - ?, color_variants = ?
+                    WHERE id = ? AND stock >= ? AND color_variants = ?
+                    """, quantity, updatedVariants, productId, quantity,
+                    String.valueOf(product.get("color_variants")));
+        }
         if (stockUpdated == 0) {
             throw new IllegalStateException("Недостаточно товара для заказа");
         }
@@ -1258,7 +1392,7 @@ public class MarketplaceService {
     public void advanceOrder(long orderId, long actorTelegramId, String targetStatus) {
         Map<String, Object> order = jdbc.queryForMap("""
                 SELECT buyer_telegram_id, seller_telegram_id, product_id, group_id,
-                       status, quantity, commission_kopecks,
+                       status, quantity, selected_color_key, commission_kopecks,
                        platform_commission_kopecks, group_commission_kopecks
                 FROM orders WHERE id = ?
                 """, orderId);
@@ -1296,9 +1430,28 @@ public class MarketplaceService {
         }
         Map<String, Object> details = orderNotificationDetails(orderId);
         if ("CANCELLED".equals(targetStatus)) {
-            jdbc.update("UPDATE products SET stock = stock + ? WHERE id = ?",
-                    ((Number) order.get("quantity")).intValue(),
-                    ((Number) order.get("product_id")).longValue());
+            int quantity = ((Number) order.get("quantity")).intValue();
+            long productId = ((Number) order.get("product_id")).longValue();
+            Object selectedColorKey = order.get("selected_color_key");
+            if (selectedColorKey == null || String.valueOf(selectedColorKey).isBlank()) {
+                jdbc.update("UPDATE products SET stock = stock + ? WHERE id = ?",
+                        quantity, productId);
+            } else {
+                Map<String, Object> productState = jdbc.queryForMap("""
+                        SELECT stock, color_variants FROM products WHERE id = ?
+                        """, productId);
+                String restoredVariants = changeColorStock(
+                        productState.get("color_variants"),
+                        ((Number) productState.get("stock")).intValue(),
+                        String.valueOf(selectedColorKey),
+                        quantity
+                );
+                jdbc.update("""
+                        UPDATE products
+                        SET stock = stock + ?, color_variants = ?
+                        WHERE id = ?
+                        """, quantity, restoredVariants, productId);
+            }
             long recipient = actorTelegramId == buyer ? seller : buyer;
             notifyUser(recipient, """
                     <b>Заказ отменён</b>
@@ -2603,5 +2756,6 @@ public class MarketplaceService {
     public record OrderItem(long productId, int quantity, String selectedColorKey) {}
     public record ClubTopic(long telegramGroupId, int threadId) {}
     public record ClearResult(int stores, int products, int orders, int groupBuys) {}
-    private record ProductColor(String key, String name) {}
+    private record ProductColor(String key, String name, int stock) {}
+    private record NormalizedColorVariants(String json, int totalStock) {}
 }

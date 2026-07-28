@@ -665,7 +665,7 @@ public class MarketplaceController {
             @NotBlank String description,
             String specifications,
             @NotBlank @Size(max = 80) String category,
-            @Positive int stock,
+            @Min(0) int stock,
             @Positive long sellerPriceKopecks,
             @NotBlank String imageUrlsJson,
             @NotBlank String colorVariantsJson
