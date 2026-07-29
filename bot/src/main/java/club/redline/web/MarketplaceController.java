@@ -224,7 +224,7 @@ public class MarketplaceController {
             @Valid @RequestBody StoreProfileRequest request) {
         marketplace.updateStoreProfile(
                 registered(initData).id(), storeId,
-                request.name(), request.imageUrl()
+                request.name(), request.imageUrl(), request.paymentDetails()
         );
     }
 
@@ -658,7 +658,8 @@ public class MarketplaceController {
     public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record StoreProfileRequest(
             @NotBlank @Size(max = 100) String name,
-            @NotBlank String imageUrl
+            @NotBlank String imageUrl,
+            @NotBlank @Size(max = 500) String paymentDetails
     ) {}
     public record UpdateProductRequest(
             @NotBlank String title,

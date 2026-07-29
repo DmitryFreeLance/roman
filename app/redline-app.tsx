@@ -195,6 +195,7 @@ type SellerProfileData = {
   storeName?: string;
   storeDescription?: string;
   storeImageUrl?: string;
+  paymentDetails?: string;
   listingCount: number;
   activeListingCount: number;
   completedSales: number;
@@ -322,6 +323,29 @@ const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
 
 const formatPrice = (kopecks: number) =>
   `${new Intl.NumberFormat("ru-RU").format(Math.round(kopecks / 100))} ₽`;
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  limit: number,
+  worker: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const run = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(values[index]);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, limit), values.length) },
+      run,
+    ),
+  );
+  return results;
+}
 
 const MOSCOW_TIME_ZONE = "Europe/Moscow";
 const parseApiDate = (value: string) => {
@@ -534,6 +558,9 @@ const camelSellerProfile = (
     : undefined,
   storeImageUrl: row.store_image_url
     ? String(row.store_image_url)
+    : undefined,
+  paymentDetails: row.payment_details
+    ? String(row.payment_details)
     : undefined,
   listingCount: asNumber(row.listing_count),
   activeListingCount: asNumber(row.active_listing_count),
@@ -781,21 +808,47 @@ export function RedlineApp() {
     if (options.body && !(options.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
-    const response = await fetch(`${API}${path}`, { ...options, headers });
-    if (!response.ok) {
-      let message = `Ошибка ${response.status}`;
-      try {
-        const body = await response.json();
-        message = body.message || body.error || message;
-      } catch {
-        // Keep the HTTP status message.
+    const controller = new AbortController();
+    const timeoutMs = options.body instanceof FormData ? 90_000 : 30_000;
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    const abortFromCaller = () => controller.abort();
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    try {
+      const response = await fetch(`${API}${path}`, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        let message = `Ошибка ${response.status}`;
+        try {
+          const body = await response.json();
+          message = body.message || body.error || message;
+        } catch {
+          // Keep the HTTP status message.
+        }
+        throw new Error(message);
       }
-      throw new Error(message);
+      if (response.status === 204) return undefined as T;
+      const responseText = await response.text();
+      if (!responseText) return undefined as T;
+      return JSON.parse(responseText) as T;
+    } catch (requestError) {
+      if (
+        controller.signal.aborted &&
+        !(options.signal && options.signal.aborted)
+      ) {
+        throw new Error(
+          options.body instanceof FormData
+            ? "Загрузка фотографии заняла слишком много времени. Проверьте интернет и повторите."
+            : "Сервер не ответил вовремя. Повторите действие.",
+        );
+      }
+      throw requestError;
+    } finally {
+      window.clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortFromCaller);
     }
-    if (response.status === 204) return undefined as T;
-    const responseText = await response.text();
-    if (!responseText) return undefined as T;
-    return JSON.parse(responseText) as T;
   }
 
   async function loadBootstrap(data = initData) {
@@ -1502,12 +1555,6 @@ export function RedlineApp() {
             club={selectedClub}
             categories={categories}
             request={request}
-            onStoreImageChanged={async () => {
-              if (selectedClub) {
-                await loadCatalog(selectedClub.telegramGroupId);
-              }
-              setToast("Фотография магазина обновлена");
-            }}
             onCreated={async () => {
               await Promise.all([
                 selectedClub
@@ -2549,6 +2596,7 @@ function SellerProfileModal({
   const [sellerProfile, setSellerProfile] =
     useState<SellerProfileData | null>(null);
   const [storeName, setStoreName] = useState("");
+  const [paymentDetails, setPaymentDetails] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [loading, setLoading] = useState(!!club);
@@ -2569,6 +2617,7 @@ function SellerProfileModal({
       const next = camelSellerProfile(row);
       setSellerProfile(next);
       setStoreName(next.storeName || "");
+      setPaymentDetails(next.paymentDetails || "");
       setError("");
     } catch (loadError) {
       setError(
@@ -2592,6 +2641,7 @@ function SellerProfileModal({
         const next = camelSellerProfile(row);
         setSellerProfile(next);
         setStoreName(next.storeName || "");
+        setPaymentDetails(next.paymentDetails || "");
         setError("");
       })
       .catch((loadError) => {
@@ -2638,7 +2688,7 @@ function SellerProfileModal({
       }
       await request(`/stores/${sellerProfile.storeId}/profile`, {
         method: "PUT",
-        body: JSON.stringify({ name: storeName, imageUrl }),
+        body: JSON.stringify({ name: storeName, imageUrl, paymentDetails }),
       });
       setFile(null);
       if (preview) {
@@ -2733,10 +2783,26 @@ function SellerProfileModal({
                   required
                 />
               </label>
+              <label>
+                <span>Реквизиты для оплаты заказов</span>
+                <textarea
+                  value={paymentDetails}
+                  onChange={(event) => setPaymentDetails(event.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="СБП, номер карты, получатель и комментарий"
+                  required
+                />
+                <small>
+                  Покупатели увидят эти реквизиты после оформления заказа.
+                </small>
+              </label>
               {error && <p className="form-error">{error}</p>}
               <button
                 className="main-action"
-                disabled={saving || !storeName.trim()}
+                disabled={
+                  saving || !storeName.trim() || !paymentDetails.trim()
+                }
               >
                 {saving ? "Сохраняем…" : "Сохранить профиль магазина"}
               </button>
@@ -3827,7 +3893,6 @@ function CreateListing({
   club,
   categories,
   request,
-  onStoreImageChanged,
   onCreated,
 }: {
   profile: Profile;
@@ -3835,7 +3900,6 @@ function CreateListing({
   club: Club | null;
   categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onStoreImageChanged: () => Promise<void>;
   onCreated: () => Promise<void>;
 }) {
   const [kind, setKind] = useState<"regular" | "group">("regular");
@@ -3851,10 +3915,10 @@ function CreateListing({
   const [storePreview, setStorePreview] = useState("");
   const [price, setPrice] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingLabel, setSavingLabel] = useState("");
   const [error, setError] = useState("");
   const [store, setStore] = useState<SellerStore | null>(null);
   const [storeLoading, setStoreLoading] = useState(true);
-  const [storeImageSaving, setStoreImageSaving] = useState(false);
 
   useEffect(
     () => () => previews.forEach((preview) => URL.revokeObjectURL(preview)),
@@ -3906,36 +3970,6 @@ function CreateListing({
   if (profile.sellerBlocked) return <EmptySection title="Публикация недоступна" text="Один из комиссионных долгов достиг лимита. Реквизиты и суммы указаны в окне оплаты." />;
   const activeClub = club;
 
-  async function replaceStoreImage(file: File) {
-    if (!store) return;
-    setStoreImageSaving(true);
-    setError("");
-    try {
-      const body = new FormData();
-      body.append("file", file);
-      const uploaded = await request<{ url: string }>("/uploads", {
-        method: "POST",
-        body,
-      });
-      await request(`/stores/${store.id}/image`, {
-        method: "PUT",
-        body: JSON.stringify({ imageUrl: uploaded.url }),
-      });
-      setStore((current) =>
-        current ? { ...current, imageUrl: uploaded.url } : current,
-      );
-      await onStoreImageChanged();
-    } catch (imageError) {
-      setError(
-        imageError instanceof Error
-          ? imageError.message
-          : "Не удалось обновить фотографию магазина",
-      );
-    } finally {
-      setStoreImageSaving(false);
-    }
-  }
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!multipleColors && !files.length) {
@@ -3965,42 +3999,58 @@ function CreateListing({
       return;
     }
     setSaving(true);
+    setSavingLabel("Подготавливаем фотографии…");
     setError("");
     const form = new FormData(event.currentTarget);
     try {
+      const totalUploads =
+        (multipleColors
+          ? selectedColorKeys.reduce(
+              (total, key) => total + (colorFiles[key]?.length || 0),
+              0,
+            )
+          : files.length) + (!store && storeFile ? 1 : 0);
+      let completedUploads = 0;
       const uploadFile = async (file: File) => {
         const body = new FormData();
         body.append("file", file);
-        return request<{ url: string }>("/uploads", { method: "POST", body });
+        const uploaded = await request<{ url: string }>("/uploads", {
+          method: "POST",
+          body,
+        });
+        completedUploads += 1;
+        setSavingLabel(
+          `Загружаем фотографии: ${completedUploads} из ${totalUploads}`,
+        );
+        return uploaded;
       };
       let imageUrls: string[] = [];
-      let colorVariants: ProductColorVariant[] = [];
+      const colorVariants: ProductColorVariant[] = [];
       if (multipleColors) {
-        colorVariants = await Promise.all(
-          PRODUCT_COLORS.filter((color) =>
-            selectedColorKeys.includes(color.key),
-          ).map(async (color) => ({
+        for (const color of PRODUCT_COLORS.filter((item) =>
+          selectedColorKeys.includes(item.key),
+        )) {
+          const uploaded = await mapWithConcurrency(
+            colorFiles[color.key] || [],
+            3,
+            uploadFile,
+          );
+          colorVariants.push({
             ...color,
             stock: Number(colorStocks[color.key]),
-            images: (
-              await Promise.all((colorFiles[color.key] || []).map(uploadFile))
-            ).map((item) => item.url),
-          })),
-        );
+            images: uploaded.map((item) => item.url),
+          });
+        }
         imageUrls = colorVariants.flatMap((variant) => variant.images);
       } else {
-        imageUrls = (await Promise.all(files.map(uploadFile))).map(
-          (item) => item.url,
-        );
+        imageUrls = (
+          await mapWithConcurrency(files, 3, uploadFile)
+        ).map((item) => item.url);
       }
 
       if (!store) {
-        const storeImageBody = new FormData();
-        storeImageBody.append("file", storeFile as File);
-        const storeImage = await request<{ url: string }>("/uploads", {
-          method: "POST",
-          body: storeImageBody,
-        });
+        const storeImage = await uploadFile(storeFile as File);
+        setSavingLabel("Создаём магазин…");
         await request("/stores", {
           method: "POST",
           body: JSON.stringify({
@@ -4014,6 +4064,7 @@ function CreateListing({
       }
 
       const rubles = Number(price.replace(/[^\d]/g, ""));
+      setSavingLabel("Сохраняем объявление…");
       await request("/products", {
         method: "POST",
         body: JSON.stringify({
@@ -4041,6 +4092,7 @@ function CreateListing({
       setError(submitError instanceof Error ? submitError.message : "Не удалось создать объявление");
     } finally {
       setSaving(false);
+      setSavingLabel("");
     }
   }
 
@@ -4070,27 +4122,10 @@ function CreateListing({
           <div className="store-bound-card">
             <span>ВАШ МАГАЗИН В ЭТОМ КЛУБЕ</span>
             <b>{store.name}</b>
-            <p>Все новые объявления автоматически публикуются в этом магазине.</p>
-            <label className={`store-image-upload existing-store-image ${store.imageUrl ? "has-preview" : ""}`}>
-              {store.imageUrl ? (
-                // Existing store image keeps its original proportions.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={store.imageUrl} alt={`Обложка магазина ${store.name}`} />
-              ) : (
-                <div><ImagePlus size={23} /><b>Добавить отдельное фото магазина</b><small>Старое фото товара больше не используется как обложка</small></div>
-              )}
-              <em>{storeImageSaving ? "Загружаем…" : store.imageUrl ? "Нажмите, чтобы заменить" : "Выбрать изображение"}</em>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                disabled={storeImageSaving}
-                onChange={(event) => {
-                  const nextFile = event.target.files?.[0];
-                  if (nextFile) void replaceStoreImage(nextFile);
-                  event.target.value = "";
-                }}
-              />
-            </label>
+            <p>
+              Все новые объявления автоматически публикуются в этом магазине.
+              Название, реквизиты и фото магазина изменяются в профиле.
+            </p>
           </div>
         ) : (
           <div className="store-setup-fields">
@@ -4353,7 +4388,7 @@ function CreateListing({
         )}
         <label className="checkbox-label"><input type="checkbox" required /><span>Подтверждаю достоверность объявления</span></label>
         {error && <p className="form-error">{error}</p>}
-        <button className="main-action" type="submit" disabled={saving || storeLoading}>{saving ? "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
+        <button className="main-action" type="submit" disabled={saving || storeLoading}>{saving ? savingLabel || "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
       </form>
     </section>
   );

@@ -12,7 +12,9 @@ import javax.imageio.ImageWriteParam;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -72,13 +74,149 @@ public class ImageStorageService implements ApplicationRunner {
     }
 
     private boolean writeOptimizedJpeg(MultipartFile file, Path target) throws IOException {
+        byte[] sourceBytes = file.getBytes();
         BufferedImage source;
-        try (InputStream input = file.getInputStream()) {
+        try (InputStream input = new ByteArrayInputStream(sourceBytes)) {
             source = ImageIO.read(input);
         }
         if (source == null) return false;
-        writeJpeg(renderScaled(source), target);
+        BufferedImage oriented = applyExifOrientation(
+                source,
+                readExifOrientation(sourceBytes)
+        );
+        writeJpeg(renderScaled(oriented), target);
         return true;
+    }
+
+    private BufferedImage applyExifOrientation(BufferedImage source, int orientation) {
+        if (orientation < 2 || orientation > 8) return source;
+        int width = source.getWidth();
+        int height = source.getHeight();
+        boolean swapEdges = orientation >= 5;
+        BufferedImage oriented = new BufferedImage(
+                swapEdges ? height : width,
+                swapEdges ? width : height,
+                source.getColorModel().hasAlpha()
+                        ? BufferedImage.TYPE_INT_ARGB
+                        : BufferedImage.TYPE_INT_RGB
+        );
+        AffineTransform transform = switch (orientation) {
+            case 2 -> new AffineTransform(-1, 0, 0, 1, width, 0);
+            case 3 -> new AffineTransform(-1, 0, 0, -1, width, height);
+            case 4 -> new AffineTransform(1, 0, 0, -1, 0, height);
+            case 5 -> new AffineTransform(0, 1, 1, 0, 0, 0);
+            case 6 -> new AffineTransform(0, 1, -1, 0, height, 0);
+            case 7 -> new AffineTransform(0, -1, -1, 0, height, width);
+            case 8 -> new AffineTransform(0, -1, 1, 0, 0, width);
+            default -> new AffineTransform();
+        };
+        Graphics2D graphics = oriented.createGraphics();
+        try {
+            graphics.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BICUBIC
+            );
+            graphics.drawImage(source, transform, null);
+        } finally {
+            graphics.dispose();
+        }
+        return oriented;
+    }
+
+    private int readExifOrientation(byte[] image) {
+        if (image.length < 4
+                || (image[0] & 0xff) != 0xff
+                || (image[1] & 0xff) != 0xd8) {
+            return 1;
+        }
+        int markerOffset = 2;
+        while (markerOffset + 4 <= image.length) {
+            if ((image[markerOffset] & 0xff) != 0xff) return 1;
+            int marker = image[markerOffset + 1] & 0xff;
+            markerOffset += 2;
+            if (marker == 0xd9 || marker == 0xda) return 1;
+            if (marker == 0x01 || marker >= 0xd0 && marker <= 0xd7) {
+                continue;
+            }
+            if (markerOffset + 2 > image.length) return 1;
+            int segmentLength = readUnsignedShort(image, markerOffset, false);
+            if (segmentLength < 2 || markerOffset + segmentLength > image.length) {
+                return 1;
+            }
+            int payloadOffset = markerOffset + 2;
+            if (marker == 0xe1
+                    && segmentLength >= 10
+                    && matchesExifHeader(image, payloadOffset)) {
+                return readTiffOrientation(
+                        image,
+                        payloadOffset + 6,
+                        markerOffset + segmentLength
+                );
+            }
+            markerOffset += segmentLength;
+        }
+        return 1;
+    }
+
+    private boolean matchesExifHeader(byte[] image, int offset) {
+        return offset + 6 <= image.length
+                && image[offset] == 'E'
+                && image[offset + 1] == 'x'
+                && image[offset + 2] == 'i'
+                && image[offset + 3] == 'f'
+                && image[offset + 4] == 0
+                && image[offset + 5] == 0;
+    }
+
+    private int readTiffOrientation(byte[] image, int tiffOffset, int segmentEnd) {
+        if (tiffOffset + 8 > segmentEnd) return 1;
+        boolean littleEndian;
+        if (image[tiffOffset] == 'I' && image[tiffOffset + 1] == 'I') {
+            littleEndian = true;
+        } else if (image[tiffOffset] == 'M' && image[tiffOffset + 1] == 'M') {
+            littleEndian = false;
+        } else {
+            return 1;
+        }
+        if (readUnsignedShort(image, tiffOffset + 2, littleEndian) != 42) return 1;
+        long firstIfdOffset = readUnsignedInt(image, tiffOffset + 4, littleEndian);
+        long ifdPosition = (long) tiffOffset + firstIfdOffset;
+        if (ifdPosition < tiffOffset || ifdPosition + 2 > segmentEnd) return 1;
+        int entries = readUnsignedShort(image, (int) ifdPosition, littleEndian);
+        int entryOffset = (int) ifdPosition + 2;
+        for (int index = 0; index < entries; index++) {
+            int current = entryOffset + index * 12;
+            if (current + 12 > segmentEnd) return 1;
+            if (readUnsignedShort(image, current, littleEndian) == 0x0112) {
+                int orientation = readUnsignedShort(
+                        image,
+                        current + 8,
+                        littleEndian
+                );
+                return orientation >= 1 && orientation <= 8 ? orientation : 1;
+            }
+        }
+        return 1;
+    }
+
+    private int readUnsignedShort(byte[] bytes, int offset, boolean littleEndian) {
+        if (littleEndian) {
+            return (bytes[offset] & 0xff) | (bytes[offset + 1] & 0xff) << 8;
+        }
+        return (bytes[offset] & 0xff) << 8 | bytes[offset + 1] & 0xff;
+    }
+
+    private long readUnsignedInt(byte[] bytes, int offset, boolean littleEndian) {
+        if (littleEndian) {
+            return (long) (bytes[offset] & 0xff)
+                    | (long) (bytes[offset + 1] & 0xff) << 8
+                    | (long) (bytes[offset + 2] & 0xff) << 16
+                    | (long) (bytes[offset + 3] & 0xff) << 24;
+        }
+        return (long) (bytes[offset] & 0xff) << 24
+                | (long) (bytes[offset + 1] & 0xff) << 16
+                | (long) (bytes[offset + 2] & 0xff) << 8
+                | (long) (bytes[offset + 3] & 0xff);
     }
 
     private BufferedImage renderScaled(BufferedImage source) {
@@ -159,9 +297,12 @@ public class ImageStorageService implements ApplicationRunner {
         if (!jpeg && !png) return;
         try {
             if (Files.size(source) < 600_000) return;
-            BufferedImage image = ImageIO.read(source.toFile());
+            byte[] sourceBytes = Files.readAllBytes(source);
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(sourceBytes));
             if (image == null) return;
-            BufferedImage resized = renderScaled(image);
+            BufferedImage resized = renderScaled(
+                    applyExifOrientation(image, readExifOrientation(sourceBytes))
+            );
             Path temporary = Files.createTempFile(uploadDirectory, "optimized-", ".tmp");
             try {
                 if (jpeg) {

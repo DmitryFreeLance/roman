@@ -2,6 +2,7 @@ package club.redline.service;
 
 import club.redline.config.RedlineProperties;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,7 @@ import java.util.Map;
 
 @Component
 public class TelegramApiClient {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final RestClient client;
     private final RedlineProperties properties;
     private volatile String botUsername;
@@ -30,12 +32,21 @@ public class TelegramApiClient {
     }
 
     public JsonNode call(String method, Object payload) {
-        JsonNode response = client.post()
+        byte[] responseBody = client.post()
                 .uri("/" + method)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(payload)
                 .retrieve()
-                .body(JsonNode.class);
+                .body(byte[].class);
+        JsonNode response;
+        try {
+            response = responseBody == null ? null : JSON.readTree(responseBody);
+        } catch (Exception parseError) {
+            throw new IllegalStateException(
+                    "Telegram API returned an unreadable response: " + method,
+                    parseError
+            );
+        }
         if (response == null || !response.path("ok").asBoolean()) {
             throw new IllegalStateException("Telegram API call failed: " + method);
         }

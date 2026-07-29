@@ -313,6 +313,11 @@ public class MarketplaceService {
                 SELECT st.id AS store_id, st.name AS store_name,
                        st.description AS store_description,
                        st.image_url AS store_image_url,
+                       COALESCE(
+                         NULLIF(st.payment_details, ''),
+                         NULLIF(st.payment_card, ''),
+                         NULLIF(st.payment_phone, '')
+                       ) AS payment_details,
                        (SELECT COUNT(*) FROM products p
                         WHERE p.store_id = st.id AND p.deleted = 0)
                          AS listing_count,
@@ -355,9 +360,12 @@ public class MarketplaceService {
 
     @Transactional
     public void updateStoreProfile(long sellerTelegramId, long storeId,
-                                   String name, String imageUrl) {
+                                   String name, String imageUrl,
+                                   String paymentDetails) {
         String normalizedName = name == null ? "" : name.strip();
         String normalizedImageUrl = imageUrl == null ? "" : imageUrl.strip();
+        String normalizedPaymentDetails =
+                paymentDetails == null ? "" : paymentDetails.strip();
         if (normalizedName.isEmpty() || normalizedName.length() > 100) {
             throw new IllegalArgumentException(
                     "Название магазина должно содержать от 1 до 100 символов"
@@ -366,11 +374,18 @@ public class MarketplaceService {
         if (normalizedImageUrl.isEmpty()) {
             throw new IllegalArgumentException("Добавьте фотографию магазина");
         }
+        if (normalizedPaymentDetails.isEmpty()
+                || normalizedPaymentDetails.length() > 500) {
+            throw new IllegalArgumentException(
+                    "Укажите реквизиты длиной до 500 символов"
+            );
+        }
         int updated = jdbc.update("""
                 UPDATE stores
-                SET name = ?, image_url = ?
+                SET name = ?, image_url = ?, payment_details = ?
                 WHERE id = ? AND seller_telegram_id = ? AND active = 1
-                """, normalizedName, normalizedImageUrl, storeId, sellerTelegramId);
+                """, normalizedName, normalizedImageUrl,
+                normalizedPaymentDetails, storeId, sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Магазин не найден");
         }

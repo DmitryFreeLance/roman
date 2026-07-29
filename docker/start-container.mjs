@@ -106,9 +106,21 @@ const proxy = http.createServer((request, response) => {
     }
     response.end(`REDLINE service is starting: ${error.message}\n`);
   });
+  proxyRequest.setTimeout(isMiniApp ? 30_000 : 120_000, () => {
+    proxyRequest.destroy(
+      new Error(
+        isMiniApp
+          ? "Mini App upstream timeout"
+          : "REDLINE API upstream timeout",
+      ),
+    );
+  });
 
   request.pipe(proxyRequest);
 });
+
+proxy.requestTimeout = 125_000;
+proxy.headersTimeout = 130_000;
 
 proxy.listen(publicPort, "0.0.0.0", () => {
   console.log(`REDLINE gateway listening on 0.0.0.0:${publicPort}`);

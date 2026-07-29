@@ -111,12 +111,15 @@ class MarketplaceServiceSqliteTest {
         );
         marketplace.updateStoreProfile(
                 sellerId, storeId, "Garage Pro",
-                "https://example.test/store-profile.jpg"
+                "https://example.test/store-profile.jpg",
+                "СБП +7 999 000-00-00"
         );
         assertThat(marketplace.myStore(sellerId, -100123L).get("image_url"))
                 .isEqualTo("https://example.test/store-profile.jpg");
         assertThat(marketplace.myStore(sellerId, -100123L).get("name"))
                 .isEqualTo("Garage Pro");
+        assertThat(marketplace.sellerProfile(sellerId, -100123L)
+                .get("payment_details")).isEqualTo("СБП +7 999 000-00-00");
         Long groupBuyId = jdbc.queryForObject(
                 "SELECT id FROM group_buys WHERE product_id = ?", Long.class, productId
         );
@@ -134,7 +137,7 @@ class MarketplaceServiceSqliteTest {
                     assertThat(((Number) row.get("final_price_kopecks")).longValue())
                             .isEqualTo(103_075L);
                     assertThat(row.get("payment_details"))
-                            .isEqualTo("+70000000000 / карта 0000");
+                            .isEqualTo("СБП +7 999 000-00-00");
                     assertThat(row.get("selected_color_name")).isEqualTo("Чёрный");
                 });
         marketplace.markGroupBuyPaid(groupBuyId, firstBuyerId);
@@ -173,7 +176,7 @@ class MarketplaceServiceSqliteTest {
                 .satisfies(row -> {
                     assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
                     assertThat(row.get("payment_details"))
-                            .isEqualTo("+70000000000 / карта 0000");
+                            .isEqualTo("СБП +7 999 000-00-00");
                 });
         assertThat(marketplace.salesOrders(sellerId, -100123L))
                 .singleElement()
