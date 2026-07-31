@@ -163,6 +163,7 @@ class MarketplaceServiceSqliteTest {
                             .isEqualTo(103_075L);
                     assertThat(row.get("payment_bank")).isEqualTo("TBANK");
                     assertThat(row.get("payment_phone")).isEqualTo("+79990000000");
+                    assertThat(row.get("seller_phone")).isEqualTo("+70000000000");
                     assertThat(row.get("payment_recipient_name"))
                             .isEqualTo("Пётр Петрович П.");
                     assertThat(row.get("selected_color_name")).isEqualTo("Чёрный");
@@ -203,6 +204,7 @@ class MarketplaceServiceSqliteTest {
                     assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
                     assertThat(row.get("payment_bank")).isEqualTo("TBANK");
                     assertThat(row.get("payment_phone")).isEqualTo("+79990000000");
+                    assertThat(row.get("seller_phone")).isEqualTo("+70000000000");
                     assertThat(row.get("payment_recipient_name"))
                             .isEqualTo("Пётр Петрович П.");
                     assertThat(row.get("fulfillment_details"))
@@ -392,6 +394,19 @@ class MarketplaceServiceSqliteTest {
                         "Brakes", 5, 50_000L, "REGULAR", "[]", "[]", null, null
                 )
         );
+        jdbc.update(
+                "UPDATE stores SET payment_phone = '' WHERE id = ?",
+                storeId
+        );
+        assertThat(marketplace.catalog(-100123L))
+                .anySatisfy(row ->
+                        assertThat(row.get("seller_phone"))
+                                .isEqualTo("+70000000000"));
+        assertThat(marketplace.commissionDebts())
+                .singleElement()
+                .satisfies(row ->
+                        assertThat(row.get("phone"))
+                                .isEqualTo("+70000000000"));
 
         marketplace.updateGlobalSettings(0, 50_000L, "СБП +7 900 000-00-00");
         assertThat(((Number) marketplace.globalSettings()

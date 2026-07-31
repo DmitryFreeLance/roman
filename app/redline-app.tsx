@@ -239,6 +239,7 @@ type GroupBuyPurchase = {
   sellerName?: string;
   sellerTelegramId?: number;
   sellerUsername?: string;
+  sellerPhone?: string;
   paymentDetails?: string;
   paymentBank?: PaymentBank;
   paymentPhone?: string;
@@ -268,6 +269,7 @@ type Order = {
   sellerName?: string;
   sellerTelegramId?: number;
   sellerUsername?: string;
+  sellerPhone?: string;
   paymentDetails?: string;
   paymentBank?: PaymentBank;
   paymentPhone?: string;
@@ -690,6 +692,7 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     sellerUsername: row.seller_username
       ? String(row.seller_username)
       : undefined,
+    sellerPhone: row.seller_phone ? String(row.seller_phone) : undefined,
     paymentDetails: row.payment_details
       ? String(row.payment_details)
       : undefined,
@@ -808,6 +811,7 @@ const camelGroupBuyPurchase = (
       ? asNumber(row.seller_telegram_id)
       : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
+    sellerPhone: row.seller_phone ? String(row.seller_phone) : undefined,
     paymentDetails: row.payment_details ? String(row.payment_details) : undefined,
     paymentBank: asPaymentBank(row.payment_bank),
     paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
@@ -4015,7 +4019,7 @@ function GroupBuyPurchaseCard({
                 openTelegramDialog(
                   purchase.sellerTelegramId!,
                   purchase.sellerUsername,
-                  purchase.paymentPhone,
+                  purchase.sellerPhone,
                   onToast,
                 )
               }
@@ -4213,7 +4217,7 @@ function OrderCard({
                     ? order.sellerUsername
                     : order.buyerUsername,
                   mode === "purchases"
-                    ? order.paymentPhone
+                    ? order.sellerPhone
                     : order.buyerPhone,
                   onToast,
                 )

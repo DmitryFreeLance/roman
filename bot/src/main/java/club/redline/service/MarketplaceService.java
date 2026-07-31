@@ -97,7 +97,8 @@ public class MarketplaceService {
                        st.id AS store_id, st.name AS store_name,
                        st.image_url AS store_image_url,
                        st.seller_telegram_id, s.username AS seller_username,
-                       st.payment_phone AS seller_phone,
+                       COALESCE(NULLIF(st.payment_phone, ''), s.phone)
+                         AS seller_phone,
                        COALESCE(NULLIF(s.display_name, ''),
                          TRIM(s.first_name || ' ' || COALESCE(s.last_name, '')))
                          AS seller_name,
@@ -142,7 +143,8 @@ public class MarketplaceService {
                   )
                 GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
                          sgf.commission_percent,
-                         st.id, st.name, st.image_url, s.username, s.display_name,
+                         st.id, st.name, st.image_url, s.username, s.phone,
+                         s.display_name,
                          s.first_name, s.last_name,
                          gb.target_count, gb.status, gb.payment_deadline
                 ORDER BY p.created_at DESC
@@ -1397,6 +1399,7 @@ public class MarketplaceService {
                        ) AS payment_details,
                        seller.telegram_id AS seller_telegram_id,
                        seller.username AS seller_username,
+                       seller.phone AS seller_phone,
                        COALESCE(NULLIF(seller.display_name, ''),
                          TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
                          AS seller_name
@@ -1477,6 +1480,7 @@ public class MarketplaceService {
                        ) AS payment_details,
                        seller.telegram_id AS seller_telegram_id,
                        seller.username AS seller_username,
+                       seller.phone AS seller_phone,
                        COALESCE(NULLIF(seller.display_name, ''),
                          TRIM(seller.first_name || ' ' || COALESCE(seller.last_name, '')))
                          AS seller_name,
@@ -1817,7 +1821,9 @@ public class MarketplaceService {
         assertGroupBuySeller(groupBuyId, sellerTelegramId);
         return jdbc.queryForList("""
                 SELECT u.telegram_id, u.username, u.first_name, u.last_name,
-                       r.contact_phone, r.selected_color_key, r.selected_color_name,
+                       COALESCE(NULLIF(r.contact_phone, ''), u.phone)
+                         AS contact_phone,
+                       r.selected_color_key, r.selected_color_name,
                        r.status, r.paid_at
                 FROM group_buy_reservations r
                 JOIN users u ON u.telegram_id = r.buyer_telegram_id
@@ -1828,7 +1834,8 @@ public class MarketplaceService {
 
     public List<Map<String, Object>> commissionDebts() {
         return jdbc.queryForList("""
-                SELECT u.telegram_id, u.username, u.first_name, u.last_name,
+                SELECT u.telegram_id, u.username, u.phone,
+                       u.first_name, u.last_name,
                        u.bot_commission_percent,
                        u.commission_debt_kopecks, u.debt_limit_kopecks,
                        (u.commission_debt_kopecks >= u.debt_limit_kopecks)
