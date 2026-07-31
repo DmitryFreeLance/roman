@@ -11,16 +11,19 @@ import {
   ChevronRight,
   CircleHelp,
   Crown,
+  ExternalLink,
   Gauge,
   Heart,
   House,
   ImagePlus,
   LayoutDashboard,
+  Lock,
   Menu,
   MessageCircle,
   Minus,
   PackagePlus,
   Pencil,
+  Phone,
   Plus,
   Search,
   Send,
@@ -64,6 +67,7 @@ type Profile = {
   commissionDebtKopecks: number;
   debtLimitKopecks: number;
   superAdmin: boolean;
+  listingCount: number;
 };
 
 type SellerFinance = {
@@ -83,6 +87,7 @@ type Club = {
   id: number;
   telegramGroupId: number;
   title: string;
+  imageUrl?: string;
   ownerTelegramId: number;
   shopThreadId: number;
   commissionPercent: number;
@@ -129,6 +134,7 @@ type Product = {
   sellerTelegramId: number;
   sellerName?: string;
   sellerUsername?: string;
+  sellerPhone?: string;
   active: boolean;
   orderCount: number;
   rating: number;
@@ -138,6 +144,7 @@ type Product = {
   targetCount?: number;
   reservedCount: number;
   groupBuyStatus?: string;
+  reservedByMe: boolean;
 };
 
 type ProductColorVariant = {
@@ -181,12 +188,17 @@ type Storefront = {
   rating: number;
 };
 
+type PaymentBank = "SBER" | "TBANK" | "ALFA" | "VTB";
+
 type SellerStore = {
   id: number;
   name: string;
   description?: string;
   imageUrl?: string;
   paymentDetails: string;
+  paymentBank?: PaymentBank;
+  paymentPhone?: string;
+  paymentRecipientName?: string;
 };
 
 type SellerProfileData = {
@@ -196,6 +208,9 @@ type SellerProfileData = {
   storeDescription?: string;
   storeImageUrl?: string;
   paymentDetails?: string;
+  paymentBank?: PaymentBank;
+  paymentPhone?: string;
+  paymentRecipientName?: string;
   listingCount: number;
   activeListingCount: number;
   completedSales: number;
@@ -211,6 +226,7 @@ type AppNotification = {
   body: string;
   isRead: boolean;
   createdAt: string;
+  targetScreen?: "orders" | "sales";
 };
 
 type GroupBuyPurchase = {
@@ -224,6 +240,9 @@ type GroupBuyPurchase = {
   sellerTelegramId?: number;
   sellerUsername?: string;
   paymentDetails?: string;
+  paymentBank?: PaymentBank;
+  paymentPhone?: string;
+  paymentRecipientName?: string;
   targetCount: number;
   reservedCount: number;
   finalPriceKopecks?: number;
@@ -250,17 +269,22 @@ type Order = {
   sellerTelegramId?: number;
   sellerUsername?: string;
   paymentDetails?: string;
+  paymentBank?: PaymentBank;
+  paymentPhone?: string;
+  paymentRecipientName?: string;
   buyerName?: string;
   buyerTelegramId?: number;
   buyerUsername?: string;
   buyerPhone?: string;
   reviewRating?: number;
   selectedColorName?: string;
+  fulfillmentDetails?: string;
 };
 
 type TelegramWebApp = {
   initData: string;
   isFullscreen?: boolean;
+  platform?: string;
   initDataUnsafe?: {
     user?: {
       id: number;
@@ -274,6 +298,7 @@ type TelegramWebApp = {
   exitFullscreen?: () => void;
   isVersionAtLeast?: (version: string) => boolean;
   hideKeyboard?: () => void;
+  openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   openTelegramLink?: (url: string) => void;
   BackButton?: { hide: () => void };
   SettingsButton?: { hide: () => void };
@@ -310,13 +335,12 @@ const PRODUCT_COLORS: Omit<ProductColorVariant, "images">[] = [
 ];
 
 const navBase: { id: Screen; label: string; icon: React.ElementType }[] = [
-  { id: "market", label: "Маркет", icon: House },
-  { id: "group", label: "Групповые закупки", icon: UsersRound },
+  { id: "market", label: "Каталог", icon: House },
+  { id: "orders", label: "Мои заказы", icon: ShoppingBag },
   { id: "cart", label: "Корзина", icon: ShoppingCart },
-  { id: "orders", label: "Мои покупки", icon: ShoppingBag },
-  { id: "sales", label: "Заказы клиентов", icon: UsersRound },
-  { id: "listings", label: "Мои объявления", icon: Store },
   { id: "create", label: "Создать объявление", icon: PackagePlus },
+  { id: "listings", label: "Мои объявления", icon: Store },
+  { id: "sales", label: "Заказы клиентов", icon: UsersRound },
   { id: "balance", label: "Баланс и комиссии", icon: WalletCards },
   { id: "help", label: "Помощь", icon: CircleHelp },
 ];
@@ -360,7 +384,79 @@ const formatMoscowDate = (value: string) =>
 const formatMoscowDateTime = (value: string) =>
   parseApiDate(value).toLocaleString("ru-RU", { timeZone: MOSCOW_TIME_ZONE });
 
-const openTelegramDialog = (telegramId: number, username?: string) => {
+const PAYMENT_BANKS: { value: PaymentBank; label: string }[] = [
+  { value: "SBER", label: "Сбербанк" },
+  { value: "TBANK", label: "Т-Банк" },
+  { value: "ALFA", label: "Альфа-Банк" },
+  { value: "VTB", label: "ВТБ" },
+];
+
+const paymentBankLabel = (bank?: PaymentBank) =>
+  PAYMENT_BANKS.find((item) => item.value === bank)?.label || "Банк";
+
+const asPaymentBank = (value: unknown): PaymentBank | undefined => {
+  const normalized = String(value || "").toUpperCase();
+  return PAYMENT_BANKS.some((item) => item.value === normalized)
+    ? (normalized as PaymentBank)
+    : undefined;
+};
+
+const openBankTransfer = (
+  bank: PaymentBank,
+  phone: string,
+  amountKopecks: number,
+) => {
+  const phoneDigits = phone.replace(/\D/g, "");
+  const amount = (amountKopecks / 100).toFixed(2);
+  const query = new URLSearchParams({
+    phone: phoneDigits,
+    phoneNumber: phoneDigits,
+    amount,
+  }).toString();
+  const links: Record<
+    PaymentBank,
+    { app: string; web: string }
+  > = {
+    SBER: {
+      app: `sberbankonline://payments/transfer/by-phone?${query}`,
+      web: "https://online.sberbank.ru/CSAFront/index.do",
+    },
+    TBANK: {
+      app: `tinkoffbank://Main/PayByMobileNumber?${query}`,
+      web: "https://www.tbank.ru/login/",
+    },
+    ALFA: {
+      app: `alfabank://transfers/by-phone?${query}`,
+      web: "https://web.alfabank.ru/",
+    },
+    VTB: {
+      app: `vtb-online://payments/transfers/by-phone?${query}`,
+      web: "https://online.vtb.ru/login",
+    },
+  };
+  const target = links[bank];
+  let appOpened = false;
+  const onVisibilityChanged = () => {
+    if (document.visibilityState === "hidden") appOpened = true;
+  };
+  document.addEventListener("visibilitychange", onVisibilityChanged);
+  window.setTimeout(() => {
+    document.removeEventListener("visibilitychange", onVisibilityChanged);
+    if (appOpened) return;
+    if (window.Telegram?.WebApp?.openLink) {
+      window.Telegram.WebApp.openLink(target.web);
+    } else {
+      window.location.href = target.web;
+    }
+  }, 1800);
+  window.location.href = target.app;
+};
+
+const openTelegramDialog = (
+  telegramId: number,
+  username?: string,
+  phone?: string,
+) => {
   const normalizedUsername = username?.replace(/^@/, "").trim();
   if (normalizedUsername) {
     const url = `https://t.me/${encodeURIComponent(normalizedUsername)}`;
@@ -369,6 +465,11 @@ const openTelegramDialog = (telegramId: number, username?: string) => {
     } else {
       window.location.href = url;
     }
+    return;
+  }
+  const normalizedPhone = phone?.replace(/[^\d+]/g, "").trim();
+  if (normalizedPhone) {
+    window.location.href = `tel:${normalizedPhone}`;
     return;
   }
   window.location.href = `tg://user?id=${telegramId}`;
@@ -396,6 +497,7 @@ const camelProfile = (row: Record<string, unknown>): Profile => ({
   commissionDebtKopecks: asNumber(row.commission_debt_kopecks),
   debtLimitKopecks: asNumber(row.debt_limit_kopecks),
   superAdmin: asBoolean(row.super_admin),
+  listingCount: asNumber(row.listing_count),
 });
 
 const camelSellerFinance = (row: Record<string, unknown>): SellerFinance => ({
@@ -415,6 +517,7 @@ const camelClub = (row: Record<string, unknown>): Club => ({
   id: asNumber(row.id),
   telegramGroupId: asNumber(row.telegram_group_id),
   title: String(row.title || ""),
+  imageUrl: row.image_url ? String(row.image_url) : undefined,
   ownerTelegramId: asNumber(row.owner_telegram_id),
   shopThreadId: asNumber(row.shop_thread_id),
   commissionPercent: asNumber(row.commission_percent),
@@ -481,6 +584,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     sellerTelegramId: asNumber(row.seller_telegram_id),
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
+    sellerPhone: row.seller_phone ? String(row.seller_phone) : undefined,
     active: row.active === undefined ? true : asBoolean(row.active),
     orderCount: asNumber(row.order_count),
     rating: asNumber(row.rating),
@@ -492,6 +596,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     groupBuyStatus: row.group_buy_status
       ? String(row.group_buy_status)
       : undefined,
+    reservedByMe: asBoolean(row.reserved_by_me),
   };
 };
 
@@ -526,6 +631,13 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     paymentDetails: row.payment_details
       ? String(row.payment_details)
       : undefined,
+    paymentBank: asPaymentBank(row.payment_bank),
+    paymentPhone: row.payment_phone
+      ? String(row.payment_phone)
+      : undefined,
+    paymentRecipientName: row.payment_recipient_name
+      ? String(row.payment_recipient_name)
+      : undefined,
     buyerName: row.buyer_name ? String(row.buyer_name) : undefined,
     buyerTelegramId: row.buyer_telegram_id
       ? asNumber(row.buyer_telegram_id)
@@ -536,6 +648,9 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     selectedColorName: row.selected_color_name
       ? String(row.selected_color_name)
       : undefined,
+    fulfillmentDetails: row.fulfillment_details
+      ? String(row.fulfillment_details)
+      : undefined,
   };
 };
 
@@ -545,6 +660,11 @@ const camelStore = (row: Record<string, unknown>): SellerStore => ({
   description: row.description ? String(row.description) : undefined,
   imageUrl: row.image_url ? String(row.image_url) : undefined,
   paymentDetails: String(row.payment_details || ""),
+  paymentBank: asPaymentBank(row.payment_bank),
+  paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
+  paymentRecipientName: row.payment_recipient_name
+    ? String(row.payment_recipient_name)
+    : undefined,
 });
 
 const camelSellerProfile = (
@@ -561,6 +681,11 @@ const camelSellerProfile = (
     : undefined,
   paymentDetails: row.payment_details
     ? String(row.payment_details)
+    : undefined,
+  paymentBank: asPaymentBank(row.payment_bank),
+  paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
+  paymentRecipientName: row.payment_recipient_name
+    ? String(row.payment_recipient_name)
     : undefined,
   listingCount: asNumber(row.listing_count),
   activeListingCount: asNumber(row.active_listing_count),
@@ -579,6 +704,10 @@ const camelNotification = (
   body: String(row.body || ""),
   isRead: asBoolean(row.is_read),
   createdAt: String(row.created_at || ""),
+  targetScreen:
+    row.target_screen === "orders" || row.target_screen === "sales"
+      ? row.target_screen
+      : undefined,
 });
 
 const camelDiscussionMessage = (
@@ -618,6 +747,11 @@ const camelGroupBuyPurchase = (
       : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
     paymentDetails: row.payment_details ? String(row.payment_details) : undefined,
+    paymentBank: asPaymentBank(row.payment_bank),
+    paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
+    paymentRecipientName: row.payment_recipient_name
+      ? String(row.payment_recipient_name)
+      : undefined,
     targetCount: asNumber(row.target_count),
     reservedCount: asNumber(row.reserved_count),
     finalPriceKopecks: row.final_price_kopecks
@@ -993,6 +1127,9 @@ export function RedlineApp() {
     () =>
       products.filter(
         (product) =>
+          product.stock > 0 &&
+          (product.kind !== "group" ||
+            product.groupBuyStatus === "COLLECTING") &&
           (effectiveActiveCategory === "Все" ||
             product.category === effectiveActiveCategory) &&
           (activeStoreId === null || product.storeId === activeStoreId) &&
@@ -1094,29 +1231,58 @@ export function RedlineApp() {
   async function reserve(product: Product, selectedColorKey?: string) {
     if (!product.groupBuyId || !profile?.phone) return;
     try {
+      const cancelling = product.reservedByMe;
       const result = await request<{
         reserved: number;
         target: number;
         thresholdReached: boolean;
-      }>(`/group-buys/${product.groupBuyId}/reservations`, {
-        method: "POST",
-        body: JSON.stringify({ phone: profile.phone, selectedColorKey }),
-      });
+      }>(
+        `/group-buys/${product.groupBuyId}/reservations${cancelling ? "/me" : ""}`,
+        {
+        method: cancelling ? "DELETE" : "POST",
+        ...(cancelling
+          ? {}
+          : {
+              body: JSON.stringify({
+                phone: profile.phone,
+                selectedColorKey,
+              }),
+            }),
+        },
+      );
       setProducts((items) =>
         items.map((item) =>
           item.id === product.id
-            ? { ...item, reservedCount: result.reserved }
+            ? {
+                ...item,
+                reservedCount: result.reserved,
+                targetCount: result.target,
+                reservedByMe: !cancelling,
+                groupBuyStatus: result.thresholdReached
+                  ? "PRICE_CONFIRMATION"
+                  : "COLLECTING",
+              }
             : item,
         ),
       );
       setSelectedProduct((item) =>
         item?.id === product.id
-          ? { ...item, reservedCount: result.reserved }
+          ? {
+              ...item,
+              reservedCount: result.reserved,
+              targetCount: result.target,
+              reservedByMe: !cancelling,
+              groupBuyStatus: result.thresholdReached
+                ? "PRICE_CONFIRMATION"
+                : "COLLECTING",
+            }
           : item,
       );
       window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("success");
       setToast(
-        result.thresholdReached
+        cancelling
+          ? "Бронь отменена."
+          : result.thresholdReached
           ? "Группа собрана. Продавец обновит цену и запустит оплату."
           : "Место в закупке забронировано.",
       );
@@ -1203,14 +1369,25 @@ export function RedlineApp() {
     checkoutRequestRef.current = null;
   }
 
-  async function checkoutCart(items: CartItem[]) {
+  async function checkoutCart(
+    items: CartItem[],
+    fulfillmentDetails: string,
+  ) {
     if (!items.length) return;
+    const normalizedFulfillment = fulfillmentDetails.trim();
+    if (normalizedFulfillment.length < 3) {
+      setToast("Укажите доставку или способ получения");
+      return;
+    }
     const fingerprint = JSON.stringify(
-      items.map((item) => [
-        item.productId,
-        item.quantity,
-        item.selectedColorKey || "",
-      ]),
+      [
+        normalizedFulfillment,
+        ...items.map((item) => [
+          item.productId,
+          item.quantity,
+          item.selectedColorKey || "",
+        ]),
+      ],
     );
     if (checkoutRequestRef.current?.fingerprint !== fingerprint) {
       checkoutRequestRef.current = {
@@ -1225,6 +1402,7 @@ export function RedlineApp() {
       method: "POST",
       body: JSON.stringify({
         requestId,
+        fulfillmentDetails: normalizedFulfillment,
         items: items.map((item) => ({
           productId: item.productId,
           quantity: item.quantity,
@@ -1318,7 +1496,9 @@ export function RedlineApp() {
   }
 
   const navItems = [
-    ...navBase,
+    ...navBase.filter(
+      (item) => item.id !== "balance" || (profile?.listingCount || 0) > 0,
+    ),
     ...(isClubOwner
       ? [{ id: "admin" as Screen, label: "Админка группы", icon: LayoutDashboard }]
       : []),
@@ -1336,7 +1516,16 @@ export function RedlineApp() {
         </button>
 
         <label className="group-switcher group-selector">
-          <span className="group-mark">{selectedClub ? selectedClub.title.slice(0, 2).toUpperCase() : "—"}</span>
+          <span className={`group-mark ${selectedClub?.imageUrl ? "has-image" : ""}`}>
+            {selectedClub?.imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={selectedClub.imageUrl} alt="" />
+            ) : selectedClub ? (
+              selectedClub.title.slice(0, 2).toUpperCase()
+            ) : (
+              "—"
+            )}
+          </span>
           <span>
             <small>КЛУБ</small>
             <select
@@ -1433,20 +1622,23 @@ export function RedlineApp() {
         <nav className="drawer-nav">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const needsClub = ["group", "cart", "orders", "sales", "listings", "create", "admin"].includes(item.id);
+            const needsClub = ["cart", "orders", "sales", "listings", "create", "admin"].includes(item.id);
             const disabled = needsClub && !selectedClub;
             return (
-              <button
-                key={item.id}
-                className={`${screen === item.id ? "active" : ""} ${disabled ? "disabled" : ""}`}
-                onClick={() => !disabled && navigate(item.id)}
-              >
-                <Icon size={19} />
-                <span>{item.label}</span>
-                {item.id === "group" && groupProducts.length > 0 && <em>{groupProducts.length}</em>}
-                {item.id === "admin" && <small>OWNER</small>}
-                {item.id === "superadmin" && <small>SUPER</small>}
-              </button>
+              <div className="drawer-nav-item" key={item.id}>
+                {(item.id === "create" || item.id === "admin") && (
+                  <span className="drawer-divider" />
+                )}
+                <button
+                  className={`${screen === item.id ? "active" : ""} ${disabled ? "disabled" : ""}`}
+                  onClick={() => !disabled && navigate(item.id)}
+                >
+                  <Icon size={19} />
+                  <span>{item.label}</span>
+                  {item.id === "admin" && <small>OWNER</small>}
+                  {item.id === "superadmin" && <small>SUPER</small>}
+                </button>
+              </div>
             );
           })}
         </nav>
@@ -1467,7 +1659,6 @@ export function RedlineApp() {
             favoritesOnly={favoritesOnly}
             setFavoritesOnly={setFavoritesOnly}
             totalProducts={products.length}
-            groupCount={groupProducts.length}
             activeCategory={effectiveActiveCategory}
             setActiveCategory={setActiveCategory}
             query={query}
@@ -1476,7 +1667,6 @@ export function RedlineApp() {
             onFavorite={(id) => void toggleFavorite(id)}
             onOpen={setSelectedProduct}
             onReserve={reserve}
-            onNavigate={navigate}
           />
         )}
 
@@ -1521,6 +1711,9 @@ export function RedlineApp() {
             mode="sales"
             club={selectedClub}
             request={request}
+            onCatalogChanged={async () => {
+              if (selectedClub) await loadCatalog(selectedClub.telegramGroupId);
+            }}
             onToast={setToast}
           />
         )}
@@ -1537,6 +1730,7 @@ export function RedlineApp() {
                   ? loadCatalog(selectedClub.telegramGroupId)
                   : Promise.resolve(),
                 reloadCategories(),
+                loadBootstrap(),
               ]);
             }}
             onToast={setToast}
@@ -1561,6 +1755,7 @@ export function RedlineApp() {
                   ? loadCatalog(selectedClub.telegramGroupId)
                   : Promise.resolve(),
                 reloadCategories(),
+                loadBootstrap(),
               ]);
               setToast("Объявление опубликовано в теме «Магазин».");
               navigate("market");
@@ -1607,6 +1802,7 @@ export function RedlineApp() {
           notifications={notifications}
           request={request}
           onChanged={reloadNotifications}
+          onNavigate={navigate}
           onClose={() => setNotificationsOpen(false)}
           onToast={setToast}
         />
@@ -1815,7 +2011,6 @@ function Market({
   favoritesOnly,
   setFavoritesOnly,
   totalProducts,
-  groupCount,
   activeCategory,
   setActiveCategory,
   query,
@@ -1824,7 +2019,6 @@ function Market({
   onFavorite,
   onOpen,
   onReserve,
-  onNavigate,
 }: {
   club: Club | null;
   clubs: Club[];
@@ -1836,7 +2030,6 @@ function Market({
   favoritesOnly: boolean;
   setFavoritesOnly: (value: boolean) => void;
   totalProducts: number;
-  groupCount: number;
   activeCategory: string;
   setActiveCategory: (value: string) => void;
   query: string;
@@ -1845,32 +2038,9 @@ function Market({
   onFavorite: (id: number) => void;
   onOpen: (product: Product) => void;
   onReserve: (product: Product, selectedColorKey?: string) => Promise<void>;
-  onNavigate: (screen: Screen) => void;
 }) {
   return (
-    <>
-      <section className="hero">
-        <div className="hero-copy">
-          <span className="eyebrow">REDLINE CLUB</span>
-          <h1>ДЕТАЛИ,<br /><em>КОТОРЫЕ РЕШАЮТ</em></h1>
-          <p>Реальные объявления и групповые закупки вашего автоклуба.</p>
-          <button onClick={() => onNavigate("create")}>Продать товар <ArrowLeft className="arrow-right" size={17} /></button>
-        </div>
-      </section>
-
-      <section className="trust-strip">
-        <div><Store size={20} /><span><strong>{clubs.length}</strong>подключено групп</span></div>
-        <i />
-        <div><ShoppingBag size={20} /><span><strong>{totalProducts}</strong>товаров в клубе</span></div>
-        <i />
-        <div><UsersRound size={20} /><span><strong>{groupCount}</strong>активных закупок</span></div>
-      </section>
-
-      <section className="catalog-section">
-        <div className="section-heading">
-          <div><span className="section-kicker">MARKETPLACE</span><h2>{club ? `Каталог · ${club.title}` : "Каталог клуба"}</h2></div>
-        </div>
-
+    <section className="catalog-section catalog-section-direct">
         {!club ? (
           <ConnectClubState hasGroups={clubs.length > 0} />
         ) : (
@@ -1974,8 +2144,7 @@ function Market({
             )}
           </>
         )}
-      </section>
-    </>
+    </section>
   );
 }
 
@@ -2016,6 +2185,10 @@ function ProductCard({
   const progress = product.targetCount
     ? Math.min(100, Math.round((product.reservedCount / product.targetCount) * 100))
     : 0;
+  const groupClosed =
+    product.kind === "group" &&
+    (product.groupBuyStatus !== "COLLECTING" ||
+      product.reservedCount >= (product.targetCount || Number.MAX_SAFE_INTEGER));
   return (
     <article className="product-card">
       <div
@@ -2055,7 +2228,24 @@ function ProductCard({
           </div>
           <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
           <div className="product-card-actions">
-            <button className="primary-card-action" onClick={product.kind === "group" ? onReserve : onOpen}>{product.kind === "group" ? "Забронировать" : "Подробнее"}<ChevronRight size={15} /></button>
+            <button
+              className={`primary-card-action ${groupClosed ? "locked" : ""} ${product.reservedByMe ? "success" : ""}`}
+              disabled={groupClosed && !product.reservedByMe}
+              onClick={product.kind === "group" ? onReserve : onOpen}
+            >
+              {product.kind === "group" ? (
+                product.reservedByMe ? (
+                  "Отменить бронь"
+                ) : groupClosed ? (
+                  <><Lock size={14} /> Группа собрана</>
+                ) : (
+                  "Забронировать"
+                )
+              ) : (
+                "Подробнее"
+              )}
+              {!groupClosed && <ChevronRight size={15} />}
+            </button>
           </div>
         </div>
       </div>
@@ -2094,6 +2284,17 @@ function ProductModal({
   const availableStock = activeColor?.stock ?? product.stock;
   const images = (activeColor?.images || product.images).filter(Boolean);
   const selectedImage = images[activeImage];
+  const groupClosed =
+    product.kind === "group" &&
+    (product.groupBuyStatus !== "COLLECTING" ||
+      product.reservedCount >= (product.targetCount || Number.MAX_SAFE_INTEGER));
+  const canToggleReservation =
+    product.kind === "group" &&
+    (product.reservedByMe
+      ? ["COLLECTING", "PRICE_CONFIRMATION"].includes(
+          product.groupBuyStatus || "COLLECTING",
+        )
+      : !groupClosed);
 
   const changeImage = (direction: number) => {
     if (images.length < 2) return;
@@ -2209,7 +2410,10 @@ function ProductModal({
           )}
           <button
             className="main-action product-buy-action"
-            disabled={availableStock < 1}
+            disabled={
+              availableStock < 1 ||
+              (product.kind === "group" && !canToggleReservation)
+            }
             onClick={
               product.kind === "group"
                 ? () => onReserve(activeColor?.key)
@@ -2217,7 +2421,11 @@ function ProductModal({
             }
           >
             {product.kind === "group"
-              ? "Забронировать место"
+              ? product.reservedByMe
+                ? "Отменить бронь"
+                : groupClosed
+                  ? <><Lock size={16} /> Группа собрана</>
+                  : "Забронировать место"
               : `В корзину · ${formatPrice(product.buyerPriceKopecks * quantity)}`}
           </button>
         </div>
@@ -2240,10 +2448,14 @@ function CartPage({
   onBack: () => void;
   onChangeQuantity: (key: string, quantity: number) => void;
   onRemove: (key: string) => void;
-  onCheckout: (items: CartItem[]) => Promise<void>;
+  onCheckout: (
+    items: CartItem[],
+    fulfillmentDetails: string,
+  ) => Promise<void>;
   onToast: (message: string) => void;
 }) {
   const [checkingOut, setCheckingOut] = useState(false);
+  const [fulfillmentDetails, setFulfillmentDetails] = useState("");
   const checkoutRef = useRef(false);
   const storeGroups = useMemo(() => {
     const grouped = new Map<
@@ -2275,7 +2487,11 @@ function CartPage({
     checkoutRef.current = true;
     setCheckingOut(true);
     try {
-      await onCheckout(items);
+      if (fulfillmentDetails.trim().length < 3) {
+        onToast("Укажите доставку или способ получения");
+        return;
+      }
+      await onCheckout(items, fulfillmentDetails);
     } catch (checkoutError) {
       onToast(
         checkoutError instanceof Error
@@ -2399,10 +2615,26 @@ function CartPage({
               <span>Итого</span>
               <strong>{formatPrice(total)}</strong>
             </div>
+            <label className="cart-fulfillment-field">
+              <span>Доставка/Получение</span>
+              <textarea
+                value={fulfillmentDetails}
+                onChange={(event) => setFulfillmentDetails(event.target.value)}
+                rows={4}
+                maxLength={1000}
+                placeholder="Например: СДЭК до пункта…, адрес, ФИО и телефон получателя или самовывоз"
+                required
+              />
+              <small>
+                Укажите способ получения и все данные, необходимые продавцу.
+              </small>
+            </label>
             <button
               type="button"
               className="main-action"
-              disabled={checkingOut}
+              disabled={
+                checkingOut || fulfillmentDetails.trim().length < 3
+              }
               onClick={() => void submit()}
             >
               <ShoppingCart size={18} />
@@ -2596,7 +2828,9 @@ function SellerProfileModal({
   const [sellerProfile, setSellerProfile] =
     useState<SellerProfileData | null>(null);
   const [storeName, setStoreName] = useState("");
-  const [paymentDetails, setPaymentDetails] = useState("");
+  const [paymentBank, setPaymentBank] = useState<PaymentBank>("SBER");
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [paymentRecipientName, setPaymentRecipientName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [loading, setLoading] = useState(!!club);
@@ -2617,7 +2851,9 @@ function SellerProfileModal({
       const next = camelSellerProfile(row);
       setSellerProfile(next);
       setStoreName(next.storeName || "");
-      setPaymentDetails(next.paymentDetails || "");
+      setPaymentBank(next.paymentBank || "SBER");
+      setPaymentPhone(next.paymentPhone || "");
+      setPaymentRecipientName(next.paymentRecipientName || "");
       setError("");
     } catch (loadError) {
       setError(
@@ -2641,7 +2877,9 @@ function SellerProfileModal({
         const next = camelSellerProfile(row);
         setSellerProfile(next);
         setStoreName(next.storeName || "");
-        setPaymentDetails(next.paymentDetails || "");
+        setPaymentBank(next.paymentBank || "SBER");
+        setPaymentPhone(next.paymentPhone || "");
+        setPaymentRecipientName(next.paymentRecipientName || "");
         setError("");
       })
       .catch((loadError) => {
@@ -2688,7 +2926,13 @@ function SellerProfileModal({
       }
       await request(`/stores/${sellerProfile.storeId}/profile`, {
         method: "PUT",
-        body: JSON.stringify({ name: storeName, imageUrl, paymentDetails }),
+        body: JSON.stringify({
+          name: storeName,
+          imageUrl,
+          paymentBank,
+          paymentPhone,
+          paymentRecipientName,
+        }),
       });
       setFile(null);
       if (preview) {
@@ -2784,24 +3028,55 @@ function SellerProfileModal({
                 />
               </label>
               <label>
-                <span>Реквизиты для оплаты заказов</span>
-                <textarea
-                  value={paymentDetails}
-                  onChange={(event) => setPaymentDetails(event.target.value)}
-                  rows={3}
-                  maxLength={500}
-                  placeholder="СБП, номер карты, получатель и комментарий"
+                <span>Банк получателя</span>
+                <select
+                  value={paymentBank}
+                  onChange={(event) =>
+                    setPaymentBank(event.target.value as PaymentBank)
+                  }
+                  required
+                >
+                  {PAYMENT_BANKS.map((bank) => (
+                    <option key={bank.value} value={bank.value}>
+                      {bank.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Телефон, привязанный к СБП</span>
+                <input
+                  value={paymentPhone}
+                  onChange={(event) => setPaymentPhone(event.target.value)}
+                  inputMode="tel"
+                  maxLength={30}
+                  placeholder="+7 999 111-22-33"
+                  required
+                />
+              </label>
+              <label>
+                <span>Имя получателя</span>
+                <input
+                  value={paymentRecipientName}
+                  onChange={(event) =>
+                    setPaymentRecipientName(event.target.value)
+                  }
+                  maxLength={100}
+                  placeholder="Иван Иванович И."
                   required
                 />
                 <small>
-                  Покупатели увидят эти реквизиты после оформления заказа.
+                  Покупатель увидит имя и полный телефон перед переводом.
                 </small>
               </label>
               {error && <p className="form-error">{error}</p>}
               <button
                 className="main-action"
                 disabled={
-                  saving || !storeName.trim() || !paymentDetails.trim()
+                  saving ||
+                  !storeName.trim() ||
+                  !paymentPhone.trim() ||
+                  !paymentRecipientName.trim()
                 }
               >
                 {saving ? "Сохраняем…" : "Сохранить профиль магазина"}
@@ -2862,6 +3137,57 @@ function SimpleList({
         <div className="empty-state"><UsersRound size={32} /><h3>Активных закупок нет</h3><p>Никакие демонстрационные товары не загружены.</p></div>
       )}
     </section>
+  );
+}
+
+function CategoryInput({
+  categories,
+  defaultValue = "",
+}: {
+  categories: Category[];
+  defaultValue?: string;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  const normalized = value.trim().toLocaleLowerCase("ru-RU");
+  const suggestions = categories
+    .filter(
+      (category) =>
+        !normalized ||
+        category.name.toLocaleLowerCase("ru-RU").includes(normalized),
+    )
+    .slice(0, 12);
+
+  return (
+    <label className="category-input-field">
+      <span>Категория</span>
+      <input
+        name="category"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        maxLength={80}
+        required
+        autoComplete="off"
+        placeholder="Выберите или впишите новую"
+      />
+      {suggestions.length > 0 && (
+        <div className="category-suggestion-list">
+          {suggestions.map((category) => (
+            <button
+              type="button"
+              key={category.id}
+              className={value === category.name ? "active" : ""}
+              onClick={() => setValue(category.name)}
+            >
+              {category.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <small>
+        Выберите существующую категорию или впишите новую — она создастся
+        автоматически.
+      </small>
+    </label>
   );
 }
 
@@ -3193,22 +3519,10 @@ function EditListingModal({
             </>
           )}
           <label><span>Название товара</span><input name="title" defaultValue={product.title} required /></label>
-          <label>
-            <span>Категория</span>
-            <input
-              name="category"
-              list="edit-category-options"
-              defaultValue={product.category}
-              maxLength={80}
-              required
-              placeholder="Выберите или впишите новую"
-            />
-            <datalist id="edit-category-options">
-              {categories.map((category) => (
-                <option key={category.id} value={category.name} />
-              ))}
-            </datalist>
-          </label>
+          <CategoryInput
+            categories={categories}
+            defaultValue={product.category}
+          />
           <label><span>Описание</span><textarea name="description" defaultValue={product.description} rows={4} required /></label>
           <label><span>Характеристики</span><textarea name="specifications" defaultValue={product.specifications} rows={4} placeholder="Артикул, производитель, размеры, совместимость…" /></label>
           <div className="form-row">
@@ -3302,7 +3616,7 @@ function OrdersPage({
   }, [club?.telegramGroupId, mode]);
 
   if (!club) {
-    return <EmptySection title={mode === "sales" ? "Заказы клиентов" : "Мои покупки"} text="Сначала выберите клуб." />;
+    return <EmptySection title={mode === "sales" ? "Заказы клиентов" : "Мои заказы"} text="Сначала выберите клуб." />;
   }
 
   async function advance(order: Order, status: "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED") {
@@ -3368,7 +3682,7 @@ function OrdersPage({
     <section className="inner-page narrow-page">
       <div className="page-title">
         <span className="section-kicker">{mode === "sales" ? "SELLER ORDERS" : "MY ORDERS"}</span>
-        <h1>{mode === "sales" ? "Заказы клиентов" : "Мои покупки"}</h1>
+        <h1>{mode === "sales" ? "Заказы клиентов" : "Мои заказы"}</h1>
         <p>{mode === "sales" ? "Контакты покупателей и выполнение заказов" : `Покупки в клубе ${club.title}`}</p>
       </div>
       {mode === "sales" && (
@@ -3386,7 +3700,10 @@ function OrdersPage({
                 key={product.id}
                 product={product}
                 request={request}
-                onChanged={loadOrders}
+                onChanged={async () => {
+                  await loadOrders();
+                  await onCatalogChanged?.();
+                }}
                 onToast={onToast}
               />
             ))}
@@ -3402,7 +3719,10 @@ function OrdersPage({
                 key={purchase.groupBuyId}
                 purchase={purchase}
                 request={request}
-                onChanged={loadOrders}
+                onChanged={async () => {
+                  await loadOrders();
+                  await onCatalogChanged?.();
+                }}
                 onToast={onToast}
               />
             ))}
@@ -3510,6 +3830,68 @@ function ReportSellerModal({
   );
 }
 
+function BankPaymentPanel({
+  bank,
+  phone,
+  recipientName,
+  amountKopecks,
+  onToast,
+}: {
+  bank?: PaymentBank;
+  phone?: string;
+  recipientName?: string;
+  amountKopecks: number;
+  onToast: (message: string) => void;
+}) {
+  if (!bank || !phone || !recipientName) {
+    return (
+      <div className="empty-inline">
+        Продавец ещё не настроил перевод по номеру телефона. Свяжитесь с ним
+        перед оплатой.
+      </div>
+    );
+  }
+  return (
+    <div className="bank-payment-panel">
+      <div className="bank-payment-title">
+        <span>ПЕРЕВОД ПРОДАВЦУ</span>
+        <b>{paymentBankLabel(bank)}</b>
+      </div>
+      <div className="bank-payment-row">
+        <span>Получатель</span>
+        <strong>{recipientName}</strong>
+      </div>
+      <div className="bank-payment-row">
+        <span>Телефон</span>
+        <strong>{phone}</strong>
+      </div>
+      <div className="bank-payment-row payment-total-row">
+        <span>Сумма</span>
+        <strong>{formatPrice(amountKopecks)}</strong>
+      </div>
+      <p className="bank-payment-warning">
+        Перед подтверждением перевода убедитесь, что приложение банка
+        показывает получателя «{recipientName}».
+      </p>
+      <button
+        type="button"
+        className="main-action bank-open-action"
+        onClick={() => {
+          try {
+            openBankTransfer(bank, phone, amountKopecks);
+            onToast(`Открываем ${paymentBankLabel(bank)}`);
+          } catch {
+            onToast("Не удалось открыть приложение банка");
+          }
+        }}
+      >
+        <ExternalLink size={17} />
+        Открыть приложение банка · {formatPrice(amountKopecks)}
+      </button>
+    </div>
+  );
+}
+
 function GroupBuyPurchaseCard({
   purchase,
   request,
@@ -3534,7 +3916,14 @@ function GroupBuyPurchaseCard({
   };
   const canPay =
     purchase.groupBuyStatus === "AWAITING_PAYMENT" &&
-    purchase.reservationStatus === "PAYMENT_REQUESTED";
+    purchase.reservationStatus === "PAYMENT_REQUESTED" &&
+    !!purchase.paymentBank &&
+    !!purchase.paymentPhone &&
+    !!purchase.paymentRecipientName;
+  const canCancelReservation =
+    ["COLLECTING", "PRICE_CONFIRMATION"].includes(
+      purchase.groupBuyStatus,
+    ) && purchase.reservationStatus === "RESERVED";
 
   return (
     <>
@@ -3550,12 +3939,17 @@ function GroupBuyPurchaseCard({
                 openTelegramDialog(
                   purchase.sellerTelegramId!,
                   purchase.sellerUsername,
+                  purchase.paymentPhone,
                 )
               }
               aria-label="Связаться с продавцом"
               title="Связаться"
             >
-              <MessageCircle size={15} />
+              {purchase.sellerUsername ? (
+                <MessageCircle size={15} />
+              ) : (
+                <Phone size={15} />
+              )}
             </button>
           )}
           <button className="report-order-button" onClick={() => setReporting(true)} aria-label="Пожаловаться на продавца" title="Пожаловаться на продавца"><AlertTriangle size={16} /></button>
@@ -3582,19 +3976,17 @@ function GroupBuyPurchaseCard({
             <b>{purchase.sellerName || purchase.storeName}</b>
             <p>{purchase.sellerUsername ? `@${purchase.sellerUsername}` : "Контакт через магазин"}</p>
           </div>
-          {purchase.paymentDetails && purchase.groupBuyStatus === "AWAITING_PAYMENT" && (
-            <div className="requisites">
-              <div><span>Реквизиты продавца</span><strong>{purchase.paymentDetails}</strong></div>
-              <button onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(purchase.paymentDetails || "");
-                  onToast("Реквизиты скопированы");
-                } catch {
-                  onToast("Не удалось скопировать");
-                }
-              }}>Копировать</button>
-            </div>
-          )}
+          {purchase.groupBuyStatus === "AWAITING_PAYMENT" &&
+            purchase.reservationStatus === "PAYMENT_REQUESTED" &&
+            purchase.finalPriceKopecks && (
+              <BankPaymentPanel
+                bank={purchase.paymentBank}
+                phone={purchase.paymentPhone}
+                recipientName={purchase.paymentRecipientName}
+                amountKopecks={purchase.finalPriceKopecks}
+                onToast={onToast}
+              />
+            )}
           {purchase.paymentDeadline && purchase.groupBuyStatus === "AWAITING_PAYMENT" && (
             <p className="payment-deadline">Оплатите до {formatMoscowDateTime(purchase.paymentDeadline)} МСК</p>
           )}
@@ -3619,7 +4011,7 @@ function GroupBuyPurchaseCard({
             try {
               await request(`/group-buys/${purchase.groupBuyId}/paid`, { method: "POST" });
               await onChanged();
-              onToast("Продавец получил уведомление об оплате");
+              onToast("Продавец получил подтверждение оплаты");
             } catch (paymentError) {
               onToast(paymentError instanceof Error ? paymentError.message : "Не удалось отметить оплату");
             } finally {
@@ -3628,6 +4020,34 @@ function GroupBuyPurchaseCard({
           }}
         >
           {saving ? "Отправляем…" : "Я оплатил"}
+        </button>
+      )}
+      {canCancelReservation && (
+        <button
+          type="button"
+          className="outline-action cancel-reservation-action"
+          disabled={saving}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await request(
+                `/group-buys/${purchase.groupBuyId}/reservations/me`,
+                { method: "DELETE" },
+              );
+              await onChanged();
+              onToast("Бронь отменена");
+            } catch (cancelError) {
+              onToast(
+                cancelError instanceof Error
+                  ? cancelError.message
+                  : "Не удалось отменить бронь",
+              );
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          Отменить бронь
         </button>
       )}
     </article>
@@ -3675,29 +4095,26 @@ function OrderCard({
   const reviewSavingRef = useRef(false);
   const steps = [
     { status: "AWAITING_PAYMENT", label: "Ожидает оплаты", text: "Покупатель переводит деньги продавцу" },
-    { status: "PAID", label: "Оплачено", text: "Продавец проверяет поступление" },
+    { status: "PAID", label: "Оплата отмечена", text: "Продавец проверяет поступление" },
     { status: "SHIPPED", label: "Отправлено", text: "Покупатель ожидает товар" },
     { status: "COMPLETED", label: "Завершено", text: "Получение подтверждено" },
   ];
   const currentIndex = steps.findIndex((step) => step.status === order.status);
   const statusLabel = order.status === "CANCELLED" ? "Отменён" : steps[currentIndex]?.label || order.status;
+  const paymentReady =
+    !!order.paymentBank &&
+    !!order.paymentPhone &&
+    !!order.paymentRecipientName;
   const action =
-    mode === "purchases" && order.status === "AWAITING_PAYMENT"
+    mode === "purchases" &&
+    order.status === "AWAITING_PAYMENT" &&
+    paymentReady
       ? { label: "Я оплатил", status: "PAID" as const }
       : mode === "sales" && order.status === "PAID"
         ? { label: "Отправил товар / выполнил услугу", status: "SHIPPED" as const }
         : mode === "purchases" && order.status === "SHIPPED"
           ? { label: "Подтвердить получение", status: "COMPLETED" as const }
           : null;
-
-  const copyValue = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      onToast("Скопировано");
-    } catch {
-      onToast("Не удалось скопировать");
-    }
-  };
 
   return (
     <article className={`order-card ${order.status === "AWAITING_PAYMENT" ? "featured-order" : ""}`}>
@@ -3718,6 +4135,9 @@ function OrderCard({
                   mode === "purchases"
                     ? order.sellerUsername
                     : order.buyerUsername,
+                  mode === "purchases"
+                    ? order.paymentPhone
+                    : order.buyerPhone,
                 )
               }
               aria-label={
@@ -3727,7 +4147,13 @@ function OrderCard({
               }
               title="Связаться"
             >
-              <MessageCircle size={15} />
+              {(mode === "purchases"
+                ? order.sellerUsername
+                : order.buyerUsername) ? (
+                <MessageCircle size={15} />
+              ) : (
+                <Phone size={15} />
+              )}
             </button>
           )}
           {mode === "purchases" && order.status !== "CANCELLED" && (
@@ -3749,6 +4175,12 @@ function OrderCard({
           <strong>{formatPrice(order.buyerPriceKopecks)}</strong>
         </div>
       </div>
+      {order.fulfillmentDetails && (
+        <div className="order-fulfillment-details">
+          <span>ДОСТАВКА/ПОЛУЧЕНИЕ</span>
+          <p>{order.fulfillmentDetails}</p>
+        </div>
+      )}
 
       {mode === "sales" && (
         <div className="client-details">
@@ -3761,7 +4193,7 @@ function OrderCard({
       {mode === "purchases" && !["COMPLETED", "CANCELLED"].includes(order.status) && (
         <>
           <button className="outline-action" onClick={onToggleRequisites}>
-            {requisitesOpen ? "Скрыть реквизиты" : "Показать реквизиты продавца"}
+            {requisitesOpen ? "Скрыть оплату" : "Перейти к оплате"}
           </button>
           {requisitesOpen && (
             <div className="payment-details">
@@ -3770,10 +4202,21 @@ function OrderCard({
                 <b>{order.sellerName || order.storeName}</b>
                 <p>{order.sellerUsername ? `@${order.sellerUsername}` : "Контакт через магазин"}</p>
               </div>
-              {order.paymentDetails && (
-                <div className="requisites"><div><span>Реквизиты продавца</span><strong>{order.paymentDetails}</strong></div><button onClick={() => void copyValue(order.paymentDetails || "")}>Копировать</button></div>
+              {order.status === "AWAITING_PAYMENT" && (
+                <BankPaymentPanel
+                  bank={order.paymentBank}
+                  phone={order.paymentPhone}
+                  recipientName={order.paymentRecipientName}
+                  amountKopecks={order.buyerPriceKopecks}
+                  onToast={onToast}
+                />
               )}
-              {!order.paymentDetails && <div className="empty-inline">Продавец ещё не указал реквизиты.</div>}
+              {order.status === "PAID" && (
+                <div className="paid-confirmation">
+                  <Check size={16} /> Вы отметили оплату. Продавец проверяет
+                  поступление.
+                </div>
+              )}
             </div>
           )}
         </>
@@ -3782,12 +4225,20 @@ function OrderCard({
       {order.status === "CANCELLED" ? (
         <div className="cancelled-order-note">Заказ отменён. Товар возвращён в остаток продавца.</div>
       ) : <div className="status-timeline">
-        {steps.map((step, index) => (
-          <div key={step.status} className={index < currentIndex ? "done" : index === currentIndex ? "current" : ""}>
-            <i>{index < currentIndex ? "✓" : index + 1}</i>
-            <span><b>{step.label}</b><small>{step.text}</small></span>
-          </div>
-        ))}
+        {steps.map((step, index) => {
+          const done =
+            index < currentIndex ||
+            (order.status === "COMPLETED" && index === currentIndex);
+          return (
+            <div
+              key={step.status}
+              className={done ? "done" : index === currentIndex ? "current" : ""}
+            >
+              <i>{done ? "✓" : index + 1}</i>
+              <span><b>{step.label}</b><small>{step.text}</small></span>
+            </div>
+          );
+        })}
       </div>}
 
       {mode === "sales" && (
@@ -4058,7 +4509,9 @@ function CreateListing({
             name: String(form.get("storeName")),
             description: "",
             imageUrl: storeImage.url,
-            paymentDetails: String(form.get("paymentDetails")),
+            paymentBank: String(form.get("paymentBank")),
+            paymentPhone: String(form.get("paymentPhone")),
+            paymentRecipientName: String(form.get("paymentRecipientName")),
           }),
         });
       }
@@ -4152,7 +4605,39 @@ function CreateListing({
                 }}
               />
             </label>
-            <label><span>Общие реквизиты продавца</span><input name="paymentDetails" required placeholder="Один номер карты, СБП или пояснение" /></label>
+            <div>
+              <span>ПРИЁМ ОПЛАТЫ</span>
+              <b>Перевод по номеру телефона</b>
+              <p>Эти данные запрашиваются только один раз. Позже их можно изменить в профиле магазина.</p>
+            </div>
+            <label>
+              <span>Банк получателя</span>
+              <select name="paymentBank" defaultValue="SBER" required>
+                {PAYMENT_BANKS.map((bank) => (
+                  <option key={bank.value} value={bank.value}>{bank.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Телефон, привязанный к СБП</span>
+              <input
+                name="paymentPhone"
+                inputMode="tel"
+                maxLength={30}
+                required
+                placeholder="+7 999 111-22-33"
+              />
+            </label>
+            <label>
+              <span>Имя получателя</span>
+              <input
+                name="paymentRecipientName"
+                maxLength={100}
+                required
+                placeholder="Иван Иванович И."
+              />
+              <small>Покупатель проверит это имя перед подтверждением перевода.</small>
+            </label>
           </div>
         )}
         <label className="checkbox-label color-mode-checkbox">
@@ -4336,22 +4821,7 @@ function CreateListing({
           </>
         )}
         <label><span>Название товара</span><input name="title" required placeholder="Например, кованые диски R20" /></label>
-        <label>
-          <span>Категория</span>
-          <input
-            name="category"
-            list="create-category-options"
-            maxLength={80}
-            required
-            placeholder="Выберите или впишите новую"
-          />
-          <datalist id="create-category-options">
-            {categories.map((category) => (
-              <option key={category.id} value={category.name} />
-            ))}
-          </datalist>
-          <small>Если такой категории ещё нет, она создастся автоматически.</small>
-        </label>
+        <CategoryInput categories={categories} />
         <label><span>Описание</span><textarea name="description" required rows={4} placeholder="Комплектация, состояние, совместимость…" /></label>
         <label><span>Характеристики товара</span><textarea name="specifications" rows={4} placeholder="Артикул, производитель, размеры, материал, совместимость…" /></label>
         <div className="form-row">
@@ -4410,6 +4880,8 @@ function ClubAdmin({
   const groupBuys = products.filter((product) => product.kind === "group");
   const [commission, setCommission] = useState(String(club.commissionPercent));
   const [paymentDetails, setPaymentDetails] = useState("");
+  const [groupImageUrl, setGroupImageUrl] = useState(club.imageUrl || "");
+  const [uploadingGroupImage, setUploadingGroupImage] = useState(false);
   const [sellerFinances, setSellerFinances] = useState<
     Record<string, unknown>[]
   >([]);
@@ -4440,6 +4912,7 @@ function ClubAdmin({
             groupCommissionKopecks: asNumber(row.group_commission_kopecks),
           });
           setPaymentDetails(String(row.payment_details || ""));
+          setGroupImageUrl(String(row.image_url || club.imageUrl || ""));
           setSellerFinances(financeRows);
         }
       })
@@ -4497,6 +4970,54 @@ function ClubAdmin({
           <h2>Настройки клуба</h2>
           <p className="settings-hint">Комиссия клуба прибавляется к цене покупателя. Менять её может владелец группы.</p>
         </div>
+        <label className="store-image-upload group-image-upload">
+          <span>Логотип клуба в верхнем меню</span>
+          {groupImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={groupImageUrl} alt={`Логотип клуба ${club.title}`} />
+          ) : (
+            <div>
+              <ImagePlus size={28} />
+              <b>Загрузить логотип клуба</b>
+              <small>Квадратное изображение JPG, PNG или WEBP</small>
+            </div>
+          )}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={uploadingGroupImage}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setUploadingGroupImage(true);
+              try {
+                const body = new FormData();
+                body.append("file", file);
+                const uploaded = await request<{ url: string }>("/uploads", {
+                  method: "POST",
+                  body,
+                });
+                await request(`/groups/${club.telegramGroupId}/image`, {
+                  method: "PUT",
+                  body: JSON.stringify({ imageUrl: uploaded.url }),
+                });
+                setGroupImageUrl(uploaded.url);
+                await onChanged();
+                onToast("Логотип клуба обновлён");
+              } catch (imageError) {
+                onToast(
+                  imageError instanceof Error
+                    ? imageError.message
+                    : "Не удалось обновить логотип клуба",
+                );
+              } finally {
+                setUploadingGroupImage(false);
+                event.target.value = "";
+              }
+            }}
+          />
+          <em>{uploadingGroupImage ? "Загрузка…" : "Изменить"}</em>
+        </label>
         <label>
           <span>Комиссия группы, %</span>
           <input
@@ -4590,10 +5111,15 @@ function ClubAdmin({
                   openTelegramDialog(
                     product.sellerTelegramId,
                     product.sellerUsername,
+                    product.sellerPhone,
                   )
                 }
               >
-                <MessageCircle size={14} /> Связаться
+                {product.sellerUsername ? (
+                  <MessageCircle size={14} />
+                ) : (
+                  <Phone size={14} />
+                )} Связаться
               </button>
               <button
                 onClick={async () => {
@@ -4704,10 +5230,15 @@ function SellerFinanceAdminRow({
             openTelegramDialog(
               sellerId,
               seller.username ? String(seller.username) : undefined,
+              seller.phone ? String(seller.phone) : undefined,
             )
           }
         >
-          <MessageCircle size={14} /> Связаться
+          {seller.username ? (
+            <MessageCircle size={14} />
+          ) : (
+            <Phone size={14} />
+          )} Связаться
         </button>
         <button type="submit" disabled={saving}>{saving ? "…" : "Сохранить"}</button>
         <button
@@ -4747,6 +5278,9 @@ function GroupBuyAdminCard({
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [buyersOpen, setBuyersOpen] = useState(false);
   const [actionSaving, setActionSaving] = useState(false);
+  const [targetCount, setTargetCount] = useState(
+    String(product.targetCount || 2),
+  );
   const status = product.groupBuyStatus || "COLLECTING";
   const statusLabel: Record<string, string> = {
     COLLECTING: "Идёт набор",
@@ -4811,6 +5345,46 @@ function GroupBuyAdminCard({
           <ChevronDown size={19} />
         </button>
       </div>
+
+      {["COLLECTING", "PRICE_CONFIRMATION"].includes(status) && (
+        <form
+          className="group-target-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runAction(
+              () =>
+                request(`/group-buys/${product.groupBuyId}/target`, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    targetCount: Number(targetCount),
+                  }),
+                }),
+              "Количество участников обновлено",
+            );
+          }}
+        >
+          <label>
+            <span>Количество участников</span>
+            <input
+              type="number"
+              min="2"
+              max="1000"
+              step="1"
+              inputMode="numeric"
+              value={targetCount}
+              onChange={(event) => setTargetCount(event.target.value)}
+              required
+            />
+          </label>
+          <button type="submit" disabled={actionSaving}>
+            Сохранить
+          </button>
+          <small>
+            Можно менять до начала оплаты. Если новый лимит уже достигнут,
+            набор закроется автоматически.
+          </small>
+        </form>
+      )}
 
       {status === "PRICE_CONFIRMATION" && (
         <form
@@ -4901,12 +5475,20 @@ function GroupBuyAdminCard({
                   type="button"
                   className="contact-icon-button"
                   onClick={() =>
-                    openTelegramDialog(buyer.telegramId, buyer.username)
+                    openTelegramDialog(
+                      buyer.telegramId,
+                      buyer.username,
+                      buyer.phone,
+                    )
                   }
                   aria-label={`Связаться с ${buyer.name}`}
                   title="Связаться"
                 >
-                  <MessageCircle size={14} />
+                  {buyer.username ? (
+                    <MessageCircle size={14} />
+                  ) : (
+                    <Phone size={14} />
+                  )}
                 </button>
               </div>
             ))}
@@ -5089,10 +5671,15 @@ function SuperAdmin({
                           openTelegramDialog(
                             telegramId,
                             user.username ? String(user.username) : undefined,
+                            user.phone ? String(user.phone) : undefined,
                           )
                         }
                       >
-                        <MessageCircle size={14} /> Связаться
+                        {user.username ? (
+                          <MessageCircle size={14} />
+                        ) : (
+                          <Phone size={14} />
+                        )} Связаться
                       </button>
                       <button
                         className={`super-role-action ${superAdmin ? "super-admin-active" : ""}`}
@@ -5162,10 +5749,17 @@ function SuperAdmin({
                         report.reported_username
                           ? String(report.reported_username)
                           : undefined,
+                        report.reported_phone
+                          ? String(report.reported_phone)
+                          : undefined,
                       )
                     }
                   >
-                    <MessageCircle size={15} /> Связаться
+                    {report.reported_username ? (
+                      <MessageCircle size={15} />
+                    ) : (
+                      <Phone size={15} />
+                    )} Связаться
                   </button>
                   {pending && (
                     <>
@@ -5343,12 +5937,14 @@ function NotificationsModal({
   notifications,
   request,
   onChanged,
+  onNavigate,
   onClose,
   onToast,
 }: {
   notifications: AppNotification[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onChanged: () => Promise<void>;
+  onNavigate: (screen: Screen) => void;
   onClose: () => void;
   onToast: (message: string) => void;
 }) {
@@ -5383,12 +5979,23 @@ function NotificationsModal({
               key={item.id}
               className={`notification-card ${item.isRead ? "" : "unread"}`}
               onClick={async () => {
-                if (item.isRead) return;
-                try {
-                  await request(`/me/notifications/${item.id}/read`, { method: "PUT" });
-                  await onChanged();
-                } catch (readError) {
-                  onToast(readError instanceof Error ? readError.message : "Не удалось прочитать уведомление");
+                if (!item.isRead) {
+                  try {
+                    await request(`/me/notifications/${item.id}/read`, {
+                      method: "PUT",
+                    });
+                    await onChanged();
+                  } catch (readError) {
+                    onToast(
+                      readError instanceof Error
+                        ? readError.message
+                        : "Не удалось прочитать уведомление",
+                    );
+                  }
+                }
+                if (item.targetScreen) {
+                  onClose();
+                  onNavigate(item.targetScreen);
                 }
               }}
             >
@@ -5423,6 +6030,26 @@ function Help() {
         <p className="settings-hint">Добавьте бота в Telegram-группу, включите темы, назначьте бота администратором и разрешите управление темами. Бот создаст тему «Магазин» автоматически.</p>
         <h2>Групповые закупки</h2>
         <p className="settings-hint">После достижения порога продавец фиксирует актуальную цену и отправляет участникам запрос оплаты.</p>
+        <h2>Как продавец оплачивает комиссии</h2>
+        <p className="settings-hint">
+          Комиссия начисляется только после завершения заказа. Для продавца
+          ведутся два независимых долга: платформе и администратору клуба. У
+          каждого долга есть собственные комиссия и лимит.
+        </p>
+        <h2>Где посмотреть сумму и реквизиты</h2>
+        <p className="settings-hint">
+          Откройте «Баланс и комиссии» в меню. Там указаны текущие долги,
+          лимиты и реквизиты супер-администратора и администратора клуба. Пункт
+          появляется после создания первого объявления.
+        </p>
+        <h2>Что происходит при достижении лимита</h2>
+        <p className="settings-hint">
+          Объявления временно скрываются, а создание новых и приём заказов
+          блокируются. В разделах продавца показывается сумма долга и реквизиты.
+          Переведите необходимую сумму получателю комиссии. После того как
+          соответствующий администратор подтвердит платёж, долг уменьшится и
+          продажи восстановятся автоматически.
+        </p>
       </div>
     </section>
   );

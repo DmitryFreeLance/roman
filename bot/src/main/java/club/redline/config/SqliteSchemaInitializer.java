@@ -79,6 +79,12 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("payment_details")) {
             jdbc.execute("ALTER TABLE stores ADD COLUMN payment_details TEXT");
         }
+        if (!columns.contains("payment_bank")) {
+            jdbc.execute("ALTER TABLE stores ADD COLUMN payment_bank TEXT");
+        }
+        if (!columns.contains("payment_recipient_name")) {
+            jdbc.execute("ALTER TABLE stores ADD COLUMN payment_recipient_name TEXT");
+        }
         jdbc.update("""
                 UPDATE stores
                 SET payment_details = COALESCE(
@@ -105,6 +111,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
 
     private void ensureGroupColumns(JdbcTemplate jdbc) {
         Set<String> columns = columns(jdbc, "telegram_groups");
+        if (!columns.contains("image_url")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN image_url TEXT");
+        }
         if (!columns.contains("debt_limit_kopecks")) {
             jdbc.execute("""
                     ALTER TABLE telegram_groups
@@ -146,6 +155,12 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         }
         if (!orderColumns.contains("selected_color_name")) {
             jdbc.execute("ALTER TABLE orders ADD COLUMN selected_color_name TEXT");
+        }
+        if (!orderColumns.contains("fulfillment_details")) {
+            jdbc.execute("""
+                    ALTER TABLE orders
+                    ADD COLUMN fulfillment_details TEXT NOT NULL DEFAULT ''
+                    """);
         }
         Set<String> reservationColumns = columns(jdbc, "group_buy_reservations");
         if (!reservationColumns.contains("selected_color_key")) {

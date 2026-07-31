@@ -57,5 +57,18 @@ class SqliteSchemaInitializerTest {
                 "SELECT name FROM categories ORDER BY sort_order",
                 String.class
         )).contains("Колодки", "Масла и автохимия", "Тормоза");
+        assertThat(jdbc.queryForList(
+                "PRAGMA table_info(stores)"
+        )).extracting(row -> String.valueOf(row.get("name")))
+                .contains("payment_bank", "payment_phone",
+                        "payment_recipient_name");
+        assertThat(jdbc.queryForList(
+                "PRAGMA table_info(telegram_groups)"
+        )).extracting(row -> String.valueOf(row.get("name")))
+                .contains("image_url");
+        assertThat(jdbc.queryForList(
+                "PRAGMA table_info(orders)"
+        )).extracting(row -> String.valueOf(row.get("name")))
+                .contains("fulfillment_details");
     }
 }

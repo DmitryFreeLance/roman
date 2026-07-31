@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
@@ -115,8 +116,10 @@ public class MarketplaceController {
     }
 
     @GetMapping("/groups/{groupId}/catalog")
-    public List<Map<String, Object>> catalog(@PathVariable long groupId) {
-        return marketplace.catalog(groupId);
+    public List<Map<String, Object>> catalog(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long groupId) {
+        return marketplace.catalog(groupId, registered(initData).id());
     }
 
     @PostMapping("/products")
@@ -200,7 +203,8 @@ public class MarketplaceController {
         TelegramUser user = registered(initData);
         long id = marketplace.createStore(user.id(), new NewStore(
                 request.groupId(), request.name(), request.description(),
-                request.imageUrl(), request.paymentDetails()
+                request.imageUrl(), request.paymentBank(),
+                request.paymentPhone(), request.paymentRecipientName()
         ));
         return Map.of("id", id);
     }
@@ -224,7 +228,8 @@ public class MarketplaceController {
             @Valid @RequestBody StoreProfileRequest request) {
         marketplace.updateStoreProfile(
                 registered(initData).id(), storeId,
-                request.name(), request.imageUrl(), request.paymentDetails()
+                request.name(), request.imageUrl(), request.paymentBank(),
+                request.paymentPhone(), request.paymentRecipientName()
         );
     }
 
@@ -235,6 +240,23 @@ public class MarketplaceController {
         TelegramUser user = registered(initData);
         return marketplace.reserve(
                 id, user.id(), request.phone(), request.selectedColorKey()
+        );
+    }
+
+    @DeleteMapping("/group-buys/{id}/reservations/me")
+    public ReservationResult cancelReservation(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id) {
+        return marketplace.cancelReservation(id, registered(initData).id());
+    }
+
+    @PutMapping("/group-buys/{id}/target")
+    public ReservationResult updateGroupBuyTarget(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long id,
+            @Valid @RequestBody GroupBuyTargetRequest request) {
+        return marketplace.updateGroupBuyTarget(
+                id, registered(initData).id(), request.targetCount()
         );
     }
 
@@ -283,7 +305,8 @@ public class MarketplaceController {
                                          @Valid @RequestBody CreateOrderRequest request) {
         return Map.of("id", marketplace.createOrder(
                 registered(initData).id(), productId,
-                request.quantity(), request.requestId(), request.selectedColorKey()
+                request.quantity(), request.requestId(), request.selectedColorKey(),
+                request.fulfillmentDetails()
         ));
     }
 
@@ -298,7 +321,8 @@ public class MarketplaceController {
                 ))
                 .toList();
         return Map.of("ids", marketplace.createOrders(
-                registered(initData).id(), request.requestId(), items
+                registered(initData).id(), request.requestId(),
+                request.fulfillmentDetails(), items
         ));
     }
 
@@ -415,6 +439,17 @@ public class MarketplaceController {
         marketplace.updateGroupCommission(
                 telegramGroupId, registered(initData).id(),
                 request.commissionPercent(), request.paymentDetails()
+        );
+    }
+
+    @PutMapping("/groups/{telegramGroupId}/image")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateGroupImage(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long telegramGroupId,
+            @Valid @RequestBody GroupImageRequest request) {
+        marketplace.updateGroupImage(
+                telegramGroupId, registered(initData).id(), request.imageUrl()
         );
     }
 
@@ -653,13 +688,19 @@ public class MarketplaceController {
             @NotBlank String name,
             String description,
             @NotBlank String imageUrl,
-            @NotBlank String paymentDetails
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            String paymentBank,
+            @NotBlank @Size(max = 30) String paymentPhone,
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName
     ) {}
     public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record StoreProfileRequest(
             @NotBlank @Size(max = 100) String name,
             @NotBlank String imageUrl,
-            @NotBlank @Size(max = 500) String paymentDetails
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            String paymentBank,
+            @NotBlank @Size(max = 30) String paymentPhone,
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName
     ) {}
     public record UpdateProductRequest(
             @NotBlank String title,
@@ -674,9 +715,12 @@ public class MarketplaceController {
     public record ProductActiveRequest(boolean active) {}
     public record CreateOrderRequest(@Min(1) @Max(99) int quantity,
                                      @NotBlank @Size(max = 100) String requestId,
-                                     String selectedColorKey) {}
+                                     String selectedColorKey,
+                                     @NotBlank @Size(max = 1000)
+                                     String fulfillmentDetails) {}
     public record CreateOrdersRequest(
             @NotBlank @Size(max = 80) String requestId,
+            @NotBlank @Size(max = 1000) String fulfillmentDetails,
             @NotNull @Size(min = 1, max = 30)
             List<@Valid CreateOrderItemRequest> items
     ) {}
@@ -686,6 +730,7 @@ public class MarketplaceController {
             String selectedColorKey
     ) {}
     public record ReserveRequest(String phone, String selectedColorKey) {}
+    public record GroupBuyTargetRequest(@Min(2) @Max(1000) int targetCount) {}
     public record DiscussionMessageRequest(
             @NotBlank @Size(max = 2000) String body
     ) {}
@@ -697,6 +742,7 @@ public class MarketplaceController {
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
     public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent,
                                          @NotBlank String paymentDetails) {}
+    public record GroupImageRequest(@NotBlank String imageUrl) {}
     public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
                                     @Positive long debtLimitKopecks,
                                     boolean active) {}
