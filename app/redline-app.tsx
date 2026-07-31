@@ -452,10 +452,50 @@ const openBankTransfer = (
   window.location.href = target.app;
 };
 
+const normalizeRussianPhone = (phone?: string) => {
+  const digits = phone?.replace(/\D/g, "") || "";
+  if (digits.length === 10 && digits.startsWith("9")) return `+7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `+7${digits.slice(1)}`;
+  }
+  if (digits.length === 11 && digits.startsWith("7")) return `+${digits}`;
+  return "";
+};
+
+const copyPhoneToClipboard = (phone: string) => {
+  const input = document.createElement("textarea");
+  input.value = phone;
+  input.readOnly = true;
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  input.style.pointerEvents = "none";
+  document.body.appendChild(input);
+  input.select();
+  input.setSelectionRange(0, phone.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  } finally {
+    input.remove();
+  }
+  if (copied) return true;
+  if (navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(phone).catch(() => {
+      // The visible notification still exposes the number if WebView blocks
+      // clipboard permissions.
+    });
+    return true;
+  }
+  return false;
+};
+
 const openTelegramDialog = (
   telegramId: number,
   username?: string,
   phone?: string,
+  onFeedback?: (message: string) => void,
 ) => {
   const normalizedUsername = username?.replace(/^@/, "").trim();
   if (normalizedUsername) {
@@ -467,14 +507,14 @@ const openTelegramDialog = (
     }
     return;
   }
-  const phoneDigits = phone?.replace(/\D/g, "") || "";
-  const normalizedPhone =
-    phoneDigits.length === 11 && phoneDigits.startsWith("8")
-      ? `+7${phoneDigits.slice(1)}`
-      : phoneDigits.startsWith("7")
-        ? `+${phoneDigits}`
-        : phoneDigits;
+  const normalizedPhone = normalizeRussianPhone(phone);
   if (normalizedPhone) {
+    const copied = copyPhoneToClipboard(normalizedPhone);
+    onFeedback?.(
+      copied
+        ? `Номер ${normalizedPhone} скопирован для звонка`
+        : `Номер для звонка: ${normalizedPhone}`,
+    );
     // Telegram's WebView may ignore window.location changes for external
     // schemes. A real anchor activated inside the user's click reliably
     // hands the tel: link to iOS/Android and desktop Telegram.
@@ -487,6 +527,7 @@ const openTelegramDialog = (
     window.setTimeout(() => callLink.remove(), 0);
     return;
   }
+  onFeedback?.("Номер телефона не указан");
   const telegramLink = document.createElement("a");
   telegramLink.href = `tg://user?id=${telegramId}`;
   telegramLink.style.display = "none";
@@ -1934,11 +1975,17 @@ function Registration({
             <input
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
+              onBlur={() => {
+                const normalized = normalizeRussianPhone(phone);
+                if (normalized) setPhone(normalized);
+              }}
               required
               inputMode="tel"
+              autoComplete="tel"
               enterKeyHint="next"
-              placeholder="+7 900 000-00-00"
+              placeholder="+7, 7, 8 или 900…"
             />
+            <small>Можно вводить с +7, с 7, с 8 или только 10 цифр.</small>
           </label>
           {clubs.length > 0 && (
             <label>
@@ -3069,11 +3116,19 @@ function SellerProfileModal({
                 <input
                   value={paymentPhone}
                   onChange={(event) => setPaymentPhone(event.target.value)}
+                  onBlur={() => {
+                    const normalized = normalizeRussianPhone(paymentPhone);
+                    if (normalized) setPaymentPhone(normalized);
+                  }}
                   inputMode="tel"
+                  autoComplete="tel"
                   maxLength={30}
-                  placeholder="+7 999 111-22-33"
+                  placeholder="+7, 7, 8 или 999…"
                   required
                 />
+                <small>
+                  Любой российский формат будет сохранён как +7XXXXXXXXXX.
+                </small>
               </label>
               <label>
                 <span>Имя получателя</span>
@@ -3961,6 +4016,7 @@ function GroupBuyPurchaseCard({
                   purchase.sellerTelegramId!,
                   purchase.sellerUsername,
                   purchase.paymentPhone,
+                  onToast,
                 )
               }
               aria-label="Связаться с продавцом"
@@ -4159,6 +4215,7 @@ function OrderCard({
                   mode === "purchases"
                     ? order.paymentPhone
                     : order.buyerPhone,
+                  onToast,
                 )
               }
               aria-label={
@@ -4644,10 +4701,20 @@ function CreateListing({
               <input
                 name="paymentPhone"
                 inputMode="tel"
+                autoComplete="tel"
                 maxLength={30}
                 required
-                placeholder="+7 999 111-22-33"
+                placeholder="+7, 7, 8 или 999…"
+                onBlur={(event) => {
+                  const normalized = normalizeRussianPhone(
+                    event.currentTarget.value,
+                  );
+                  if (normalized) event.currentTarget.value = normalized;
+                }}
               />
+              <small>
+                Любой российский формат будет сохранён как +7XXXXXXXXXX.
+              </small>
             </label>
             <label>
               <span>Имя получателя</span>
@@ -5078,6 +5145,7 @@ function ClubAdmin({
             savePath={`/groups/${club.telegramGroupId}/admin/sellers/${asNumber(seller.telegram_id)}/finance`}
             repayPath={`/groups/${club.telegramGroupId}/admin/sellers/${asNumber(seller.telegram_id)}/repay`}
             request={request}
+            onToast={onToast}
             onSaved={async (message) => {
               const rows = await request<Record<string, unknown>[]>(
                 `/groups/${club.telegramGroupId}/admin/seller-finances`,
@@ -5133,6 +5201,7 @@ function ClubAdmin({
                     product.sellerTelegramId,
                     product.sellerUsername,
                     product.sellerPhone,
+                    onToast,
                   )
                 }
               >
@@ -5194,12 +5263,14 @@ function SellerFinanceAdminRow({
   repayPath,
   request,
   onSaved,
+  onToast,
 }: {
   seller: Record<string, unknown>;
   savePath: string;
   repayPath: string;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onSaved: (message: string) => Promise<void>;
+  onToast: (message: string) => void;
 }) {
   const sellerId = asNumber(seller.telegram_id);
   const sellerName = String(
@@ -5252,6 +5323,7 @@ function SellerFinanceAdminRow({
               sellerId,
               seller.username ? String(seller.username) : undefined,
               seller.phone ? String(seller.phone) : undefined,
+              onToast,
             )
           }
         >
@@ -5500,6 +5572,7 @@ function GroupBuyAdminCard({
                       buyer.telegramId,
                       buyer.username,
                       buyer.phone,
+                      onToast,
                     )
                   }
                   aria-label={`Связаться с ${buyer.name}`}
@@ -5656,6 +5729,7 @@ function SuperAdmin({
                 savePath={`/admin/debts/${sellerId}/settings`}
                 repayPath={`/admin/debts/${sellerId}/repay`}
                 request={request}
+                onToast={onToast}
                 onSaved={async (message) => {
                   await loadAdminData();
                   onToast(message);
@@ -5693,6 +5767,7 @@ function SuperAdmin({
                             telegramId,
                             user.username ? String(user.username) : undefined,
                             user.phone ? String(user.phone) : undefined,
+                            onToast,
                           )
                         }
                       >
@@ -5773,6 +5848,7 @@ function SuperAdmin({
                         report.reported_phone
                           ? String(report.reported_phone)
                           : undefined,
+                        onToast,
                       )
                     }
                   >

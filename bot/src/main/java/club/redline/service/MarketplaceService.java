@@ -432,18 +432,7 @@ public class MarketplaceService {
                     "Выберите банк из списка"
             );
         };
-        String digits = phone == null ? "" : phone.replaceAll("\\D", "");
-        if (digits.length() == 10 && digits.startsWith("9")) {
-            digits = "7" + digits;
-        } else if (digits.length() == 11 && digits.startsWith("8")) {
-            digits = "7" + digits.substring(1);
-        }
-        if (digits.length() != 11 || !digits.startsWith("7")) {
-            throw new IllegalArgumentException(
-                    "Введите российский номер телефона в формате +7"
-            );
-        }
-        String normalizedPhone = "+" + digits;
+        String normalizedPhone = normalizeRussianPhone(phone);
         String normalizedRecipientName =
                 recipientName == null ? "" : recipientName.strip();
         if (normalizedRecipientName.length() < 3
@@ -531,12 +520,13 @@ public class MarketplaceService {
     @Transactional
     public void registerProfile(long telegramId, String displayName, String phone, Long groupId) {
         validateActiveGroup(groupId);
+        String normalizedPhone = normalizeRussianPhone(phone);
         int updated = jdbc.update("""
                 UPDATE users
                 SET display_name = ?, phone = ?, selected_group_id = ?, registered = 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ?
-                """, displayName.strip(), phone.strip(), groupId, telegramId);
+                """, displayName.strip(), normalizedPhone, groupId, telegramId);
         if (updated == 0) throw new IllegalArgumentException("Telegram user is not initialized");
     }
 
@@ -804,6 +794,7 @@ public class MarketplaceService {
     @Transactional
     public ReservationResult reserve(long groupBuyId, long buyerTelegramId, String phone,
                                      String selectedColorKey) {
+        String normalizedPhone = normalizeRussianPhone(phone);
         Map<String, Object> groupBuy = jdbc.queryForMap("""
                 SELECT gb.target_count, gb.status, p.stock, p.group_id,
                        p.active, p.deleted, p.color_variants,
@@ -860,7 +851,7 @@ public class MarketplaceService {
                   paid_at = NULL,
                   created_at = CURRENT_TIMESTAMP
                 WHERE group_buy_reservations.status = 'CANCELLED'
-                """, groupBuyId, buyerTelegramId, phone,
+                """, groupBuyId, buyerTelegramId, normalizedPhone,
                 selectedColor == null ? null : selectedColor.key(),
                 selectedColor == null ? null : selectedColor.name());
         Integer reserved = jdbc.queryForObject("""
@@ -1365,6 +1356,21 @@ public class MarketplaceService {
             );
         }
         return normalized;
+    }
+
+    private String normalizeRussianPhone(String phone) {
+        String digits = phone == null ? "" : phone.replaceAll("\\D", "");
+        if (digits.length() == 10 && digits.startsWith("9")) {
+            digits = "7" + digits;
+        } else if (digits.length() == 11 && digits.startsWith("8")) {
+            digits = "7" + digits.substring(1);
+        }
+        if (digits.length() != 11 || !digits.startsWith("7")) {
+            throw new IllegalArgumentException(
+                    "Введите российский номер: +7, 7, 8 или 10 цифр начиная с 9"
+            );
+        }
+        return "+" + digits;
     }
 
     public List<Map<String, Object>> purchaseOrders(long buyerTelegramId,

@@ -67,8 +67,12 @@ class MarketplaceServiceSqliteTest {
         marketplace.upsertUser(new TelegramUser(firstBuyerId, "buyer1", "Buyer", "One"));
         marketplace.upsertUser(new TelegramUser(secondBuyerId, "buyer2", "Buyer", "Two"));
         marketplace.registerProfile(sellerId, "Seller", "+70000000000");
-        marketplace.registerProfile(firstBuyerId, "Buyer One", "+70000000001");
+        marketplace.registerProfile(firstBuyerId, "Buyer One", "80000000001");
         marketplace.registerProfile(secondBuyerId, "Buyer Two", "+70000000002");
+        assertThat(jdbc.queryForObject(
+                "SELECT phone FROM users WHERE telegram_id = ?",
+                String.class, firstBuyerId
+        )).isEqualTo("+70000000001");
         marketplace.registerGroup(-100123L, "REDLINE Test", sellerId, 7);
         marketplace.updateGroupImage(
                 -100123L, sellerId, "https://example.test/club.jpg"
