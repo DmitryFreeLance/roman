@@ -467,12 +467,33 @@ const openTelegramDialog = (
     }
     return;
   }
-  const normalizedPhone = phone?.replace(/[^\d+]/g, "").trim();
+  const phoneDigits = phone?.replace(/\D/g, "") || "";
+  const normalizedPhone =
+    phoneDigits.length === 11 && phoneDigits.startsWith("8")
+      ? `+7${phoneDigits.slice(1)}`
+      : phoneDigits.startsWith("7")
+        ? `+${phoneDigits}`
+        : phoneDigits;
   if (normalizedPhone) {
-    window.location.href = `tel:${normalizedPhone}`;
+    // Telegram's WebView may ignore window.location changes for external
+    // schemes. A real anchor activated inside the user's click reliably
+    // hands the tel: link to iOS/Android and desktop Telegram.
+    const callLink = document.createElement("a");
+    callLink.href = `tel:${normalizedPhone}`;
+    callLink.style.display = "none";
+    callLink.setAttribute("aria-hidden", "true");
+    document.body.appendChild(callLink);
+    callLink.click();
+    window.setTimeout(() => callLink.remove(), 0);
     return;
   }
-  window.location.href = `tg://user?id=${telegramId}`;
+  const telegramLink = document.createElement("a");
+  telegramLink.href = `tg://user?id=${telegramId}`;
+  telegramLink.style.display = "none";
+  telegramLink.setAttribute("aria-hidden", "true");
+  document.body.appendChild(telegramLink);
+  telegramLink.click();
+  window.setTimeout(() => telegramLink.remove(), 0);
 };
 
 const asBoolean = (value: unknown) =>
