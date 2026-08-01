@@ -417,7 +417,7 @@ const asPaymentBank = (value: unknown): PaymentBank | undefined => {
 };
 
 const openSbpLink = (link: string) => {
-  if (!/^https:\/\/qr\.nspk\.ru\//i.test(link)) {
+  if (!/^https:\/\/(?:qr\.nspk\.ru|c2c\.cbrpay\.ru)\//i.test(link)) {
     throw new Error("Некорректная ссылка СБП");
   }
   if (window.Telegram?.WebApp?.openLink) {
@@ -3162,17 +3162,17 @@ function SellerProfileModal({
                 </small>
               </label>
               <label>
-                <span>Официальная ссылка СБП</span>
+                <span>Ссылка СБП или перевод по QR</span>
                 <input
                   value={paymentSbpLink}
                   onChange={(event) => setPaymentSbpLink(event.target.value)}
                   inputMode="url"
                   maxLength={500}
-                  placeholder="https://qr.nspk.ru/..."
+                  placeholder="https://c2c.cbrpay.ru/..."
                 />
                 <small>
-                  Необязательно. Получите ссылку или QR в своём банке и вставьте
-                  ссылку qr.nspk.ru — покупатель сможет выбрать любой свой банк.
+                  Необязательно. Поддерживаются торговые ссылки qr.nspk.ru и
+                  личные переводы физлицу через c2c.cbrpay.ru.
                 </small>
               </label>
               {error && <p className="form-error">{error}</p>}
@@ -4789,16 +4789,16 @@ function CreateListing({
               <small>Покупатель проверит это имя перед подтверждением перевода.</small>
             </label>
             <label>
-              <span>Официальная ссылка СБП</span>
+              <span>Ссылка СБП или перевод по QR</span>
               <input
                 name="paymentSbpLink"
                 inputMode="url"
                 maxLength={500}
-                placeholder="https://qr.nspk.ru/..."
+                placeholder="https://c2c.cbrpay.ru/..."
               />
               <small>
-                Необязательно. Вставьте ссылку из QR, полученного в вашем банке,
-                чтобы покупатель мог выбрать любое банковское приложение.
+                Необязательно. Поддерживаются qr.nspk.ru и личные ссылки
+                c2c.cbrpay.ru, полученные в банковском приложении.
               </small>
             </label>
           </div>
@@ -5206,7 +5206,7 @@ function ClubAdmin({
         <label><span>Банк получателя комиссии</span><select value={paymentBank} onChange={(event) => setPaymentBank(event.target.value as PaymentBank)} required>{PAYMENT_BANKS.map((bank) => <option key={bank.value} value={bank.value}>{bank.label}</option>)}</select></label>
         <label><span>Телефон СБП</span><input value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} onBlur={() => { const normalized = normalizeRussianPhone(paymentPhone); if (normalized) setPaymentPhone(normalized); }} inputMode="tel" placeholder="+7, 7, 8 или 999…" required /></label>
         <label><span>ФИО получателя</span><input value={paymentRecipientName} onChange={(event) => setPaymentRecipientName(event.target.value)} maxLength={100} placeholder="Иван Иванович И." required /></label>
-        <label><span>Официальная ссылка СБП</span><input value={paymentSbpLink} onChange={(event) => setPaymentSbpLink(event.target.value)} inputMode="url" maxLength={500} placeholder="https://qr.nspk.ru/..." /><small>Получите ссылку/QR в банке. По ней продавец сможет выбрать свой банк.</small></label>
+        <label><span>Ссылка СБП или перевод по QR</span><input value={paymentSbpLink} onChange={(event) => setPaymentSbpLink(event.target.value)} inputMode="url" maxLength={500} placeholder="https://c2c.cbrpay.ru/..." /><small>Можно использовать личную C2C-ссылку физлица или торговую ссылку qr.nspk.ru.</small></label>
         <button className="main-action" disabled={savingCommission}>
           {savingCommission ? "Сохраняем…" : "Сохранить настройки"}
         </button>
@@ -5782,7 +5782,7 @@ function SuperAdmin({
           <label><span>Банк супер-администратора</span><select value={globalSettings.paymentBank} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentBank: event.target.value as PaymentBank }))} required>{PAYMENT_BANKS.map((bank) => <option key={bank.value} value={bank.value}>{bank.label}</option>)}</select></label>
           <label><span>Телефон СБП</span><input value={globalSettings.paymentPhone} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentPhone: event.target.value }))} onBlur={() => setGlobalSettings((current) => ({ ...current, paymentPhone: normalizeRussianPhone(current.paymentPhone) || current.paymentPhone }))} inputMode="tel" placeholder="+7, 7, 8 или 999…" required /></label>
           <label><span>ФИО получателя</span><input value={globalSettings.paymentRecipientName} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentRecipientName: event.target.value }))} maxLength={100} placeholder="Иван Иванович И." required /></label>
-          <label><span>Официальная ссылка СБП</span><input value={globalSettings.paymentSbpLink} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentSbpLink: event.target.value }))} inputMode="url" maxLength={500} placeholder="https://qr.nspk.ru/..." /><small>Получите ссылку/QR в банке. Продавец сможет открыть её и выбрать свой банк.</small></label>
+          <label><span>Ссылка СБП или перевод по QR</span><input value={globalSettings.paymentSbpLink} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentSbpLink: event.target.value }))} inputMode="url" maxLength={500} placeholder="https://c2c.cbrpay.ru/..." /><small>Можно использовать личную C2C-ссылку физлица или торговую ссылку qr.nspk.ru.</small></label>
           <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
         </form>
       )}

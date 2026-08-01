@@ -1396,9 +1396,9 @@ public class MarketplaceService {
         String normalized = sbpLink == null ? "" : sbpLink.strip();
         if (normalized.isEmpty()) return "";
         if (!normalized.matches(
-                "https://qr\\.nspk\\.ru/[A-Za-z0-9]+(?:\\?.*)?")) {
+                "https://(?:qr\\.nspk\\.ru|c2c\\.cbrpay\\.ru)/[A-Za-z0-9]+(?:\\?.*)?")) {
             throw new IllegalArgumentException(
-                    "Ссылка СБП должна начинаться с https://qr.nspk.ru/"
+                    "Используйте ссылку https://qr.nspk.ru/ или https://c2c.cbrpay.ru/"
             );
         }
         return normalized;
