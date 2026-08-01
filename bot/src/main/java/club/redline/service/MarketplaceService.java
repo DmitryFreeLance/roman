@@ -436,6 +436,7 @@ public class MarketplaceService {
             case "TBANK" -> "Т-Банк";
             case "ALFA" -> "Альфа-Банк";
             case "VTB" -> "ВТБ";
+            case "GAZPROM" -> "Газпромбанк";
             default -> throw new IllegalArgumentException(
                     "Выберите банк из списка"
             );

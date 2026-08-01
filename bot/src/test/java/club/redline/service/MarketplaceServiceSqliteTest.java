@@ -428,12 +428,14 @@ class MarketplaceServiceSqliteTest {
                                 .isEqualTo("+70000000000"));
 
         marketplace.updateGlobalSettings(
-                0, 50_000L, "SBER", "+7 900 000-00-00",
+                0, 50_000L, "GAZPROM", "+7 900 000-00-00",
                 "Администратор А.",
                 "https://qr.nspk.ru/AS30003P3RH0LJ2A9ROO038L6NT5RU1M"
         );
         assertThat(((Number) marketplace.globalSettings()
                 .get("bot_commission_percent")).doubleValue()).isZero();
+        assertThat(marketplace.globalSettings().get("payment_bank"))
+                .isEqualTo("GAZPROM");
         assertThat(marketplace.globalSettings().get("payment_phone"))
                 .isEqualTo("+79000000000");
         assertThat(marketplace.globalSettings().get("payment_sbp_link"))

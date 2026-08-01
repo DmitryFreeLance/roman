@@ -196,7 +196,7 @@ type Storefront = {
   rating: number;
 };
 
-type PaymentBank = "SBER" | "TBANK" | "ALFA" | "VTB";
+type PaymentBank = "SBER" | "TBANK" | "ALFA" | "VTB" | "GAZPROM";
 
 type SellerStore = {
   id: number;
@@ -403,6 +403,7 @@ const PAYMENT_BANKS: { value: PaymentBank; label: string }[] = [
   { value: "TBANK", label: "Т-Банк" },
   { value: "ALFA", label: "Альфа-Банк" },
   { value: "VTB", label: "ВТБ" },
+  { value: "GAZPROM", label: "Газпромбанк" },
 ];
 
 const paymentBankLabel = (bank?: PaymentBank) =>

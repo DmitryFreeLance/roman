@@ -720,7 +720,7 @@ public class MarketplaceController {
             @NotBlank String name,
             String description,
             @NotBlank String imageUrl,
-            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB|GAZPROM")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
@@ -730,7 +730,7 @@ public class MarketplaceController {
     public record StoreProfileRequest(
             @NotBlank @Size(max = 100) String name,
             @NotBlank String imageUrl,
-            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB|GAZPROM")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
@@ -779,7 +779,7 @@ public class MarketplaceController {
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
     public record GroupCommissionRequest(
             @Min(0) @Max(30) double commissionPercent,
-            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB|GAZPROM")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
@@ -799,7 +799,7 @@ public class MarketplaceController {
     public record GlobalSettingsRequest(
             @Min(0) @Max(30) double botCommissionPercent,
             @Positive long debtLimitKopecks,
-            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB|GAZPROM")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
