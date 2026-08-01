@@ -294,14 +294,15 @@ public class MarketplaceService {
         PaymentMethod payment = normalizePaymentMethod(
                 input.paymentBank(),
                 input.paymentPhone(),
-                input.paymentRecipientName()
+                input.paymentRecipientName(),
+                input.paymentSbpLink()
         );
         Long storeId = jdbc.queryForObject("""
                 INSERT INTO stores
                   (group_id, seller_telegram_id, name, description,
                    image_url, payment_bank, payment_phone,
-                   payment_recipient_name, payment_details)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   payment_recipient_name, payment_sbp_link, payment_details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                   name = EXCLUDED.name,
                   description = EXCLUDED.description,
@@ -309,12 +310,14 @@ public class MarketplaceService {
                   payment_bank = EXCLUDED.payment_bank,
                   payment_phone = EXCLUDED.payment_phone,
                   payment_recipient_name = EXCLUDED.payment_recipient_name,
+                  payment_sbp_link = EXCLUDED.payment_sbp_link,
                   payment_details = EXCLUDED.payment_details,
                   active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
                 input.description(), input.imageUrl(), payment.bank(),
-                payment.phone(), payment.recipientName(), payment.details());
+                payment.phone(), payment.recipientName(), payment.sbpLink(),
+                payment.details());
         return storeId;
     }
 
@@ -322,7 +325,7 @@ public class MarketplaceService {
         return jdbc.queryForMap("""
                 SELECT st.id, st.name, st.description, st.image_url,
                        st.payment_bank, st.payment_phone,
-                       st.payment_recipient_name,
+                       st.payment_recipient_name, st.payment_sbp_link,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -342,7 +345,7 @@ public class MarketplaceService {
                        st.description AS store_description,
                        st.image_url AS store_image_url,
                        st.payment_bank, st.payment_phone,
-                       st.payment_recipient_name,
+                       st.payment_recipient_name, st.payment_sbp_link,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -392,11 +395,12 @@ public class MarketplaceService {
     public void updateStoreProfile(long sellerTelegramId, long storeId,
                                    String name, String imageUrl,
                                    String paymentBank, String paymentPhone,
-                                   String paymentRecipientName) {
+                                   String paymentRecipientName,
+                                   String paymentSbpLink) {
         String normalizedName = name == null ? "" : name.strip();
         String normalizedImageUrl = imageUrl == null ? "" : imageUrl.strip();
         PaymentMethod payment = normalizePaymentMethod(
-                paymentBank, paymentPhone, paymentRecipientName
+                paymentBank, paymentPhone, paymentRecipientName, paymentSbpLink
         );
         if (normalizedName.isEmpty() || normalizedName.length() > 100) {
             throw new IllegalArgumentException(
@@ -410,18 +414,20 @@ public class MarketplaceService {
                 UPDATE stores
                 SET name = ?, image_url = ?,
                     payment_bank = ?, payment_phone = ?,
-                    payment_recipient_name = ?, payment_details = ?
+                    payment_recipient_name = ?, payment_sbp_link = ?,
+                    payment_details = ?
                 WHERE id = ? AND seller_telegram_id = ? AND active = 1
                 """, normalizedName, normalizedImageUrl, payment.bank(),
-                payment.phone(), payment.recipientName(), payment.details(),
-                storeId, sellerTelegramId);
+                payment.phone(), payment.recipientName(), payment.sbpLink(),
+                payment.details(), storeId, sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Магазин не найден");
         }
     }
 
     private PaymentMethod normalizePaymentMethod(String bank, String phone,
-                                                 String recipientName) {
+                                                 String recipientName,
+                                                 String sbpLink) {
         String normalizedBank = bank == null
                 ? ""
                 : bank.strip().toUpperCase(Locale.ROOT);
@@ -443,12 +449,14 @@ public class MarketplaceService {
                     "Укажите имя получателя длиной от 3 до 100 символов"
             );
         }
+        String normalizedSbpLink = normalizeSbpLink(sbpLink);
         return new PaymentMethod(
                 normalizedBank,
                 normalizedPhone,
                 normalizedRecipientName,
                 bankName + " · " + normalizedPhone + " · "
-                        + normalizedRecipientName
+                        + normalizedRecipientName,
+                normalizedSbpLink
         );
     }
 
@@ -497,6 +505,10 @@ public class MarketplaceService {
                        u.commission_debt_kopecks AS platform_debt_kopecks,
                        u.debt_limit_kopecks AS platform_debt_limit_kopecks,
                        ps.payment_details AS platform_payment_details,
+                       ps.payment_bank AS platform_payment_bank,
+                       ps.payment_phone AS platform_payment_phone,
+                       ps.payment_recipient_name AS platform_payment_recipient_name,
+                       ps.payment_sbp_link AS platform_payment_sbp_link,
                        COALESCE(sgf.commission_percent, g.commission_percent)
                          AS group_commission_percent,
                        COALESCE(sgf.commission_debt_kopecks, 0)
@@ -504,6 +516,10 @@ public class MarketplaceService {
                        COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
                          AS group_debt_limit_kopecks,
                        g.payment_details AS group_payment_details,
+                       g.payment_bank AS group_payment_bank,
+                       g.payment_phone AS group_payment_phone,
+                       g.payment_recipient_name AS group_payment_recipient_name,
+                       g.payment_sbp_link AS group_payment_sbp_link,
                        (u.commission_debt_kopecks >= u.debt_limit_kopecks)
                          AS platform_blocked,
                        (COALESCE(sgf.commission_debt_kopecks, 0)
@@ -1064,7 +1080,7 @@ public class MarketplaceService {
             throw new IllegalStateException("Reservation is not payable");
         }
         notifyGroupBuySeller(groupBuyId, """
-                <b>Участник отметил оплату</b>
+                <b>Участник подтвердил оплату</b>
                 Покупатель: %s
 
                 Следующий шаг: проверьте фактическое поступление денег. Когда оплату
@@ -1375,6 +1391,18 @@ public class MarketplaceService {
         return "+" + digits;
     }
 
+    private String normalizeSbpLink(String sbpLink) {
+        String normalized = sbpLink == null ? "" : sbpLink.strip();
+        if (normalized.isEmpty()) return "";
+        if (!normalized.matches(
+                "https://qr\\.nspk\\.ru/[A-Za-z0-9]+(?:\\?.*)?")) {
+            throw new IllegalArgumentException(
+                    "Ссылка СБП должна начинаться с https://qr.nspk.ru/"
+            );
+        }
+        return normalized;
+    }
+
     public List<Map<String, Object>> purchaseOrders(long buyerTelegramId,
                                                      long telegramGroupId) {
         return jdbc.queryForList("""
@@ -1391,7 +1419,7 @@ public class MarketplaceService {
                        review.rating AS review_rating,
                        st.id AS store_id, st.name AS store_name,
                        st.payment_bank, st.payment_phone,
-                       st.payment_recipient_name,
+                       st.payment_recipient_name, st.payment_sbp_link,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -1472,7 +1500,7 @@ public class MarketplaceService {
                        LIMIT 1) AS selected_color_images,
                        st.id AS store_id, st.name AS store_name,
                        st.payment_bank, st.payment_phone,
-                       st.payment_recipient_name,
+                       st.payment_recipient_name, st.payment_sbp_link,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -2166,6 +2194,7 @@ public class MarketplaceService {
 
         jdbc.update("DELETE FROM reviews");
         jdbc.update("DELETE FROM seller_reports");
+        jdbc.update("DELETE FROM support_requests");
         jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM product_discussion_messages");
         jdbc.update("DELETE FROM commission_ledger");
@@ -2364,6 +2393,92 @@ public class MarketplaceService {
     }
 
     @Transactional
+    public long submitSupportRequest(long authorTelegramId, String message) {
+        String normalized = message == null ? "" : message.strip();
+        if (normalized.length() < 5 || normalized.length() > 2_000) {
+            throw new IllegalArgumentException(
+                    "Сообщение должно содержать от 5 до 2000 символов"
+            );
+        }
+        Long requestId = jdbc.queryForObject("""
+                INSERT INTO support_requests (author_telegram_id, message)
+                VALUES (?, ?)
+                RETURNING id
+                """, Long.class, authorTelegramId, normalized);
+        Integer adminExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE telegram_id = ?",
+                Integer.class, superAdminTelegramId
+        );
+        if (adminExists != null && adminExists > 0) {
+            notifyUser(superAdminTelegramId, """
+                    <b>Новое обращение в помощь</b>
+                    Обращение: <b>#%s</b>
+                    Пользователь: %s
+                    Сообщение: %s
+
+                    Откройте «Супер-админ» → «Модерация» → «Помощь».
+                    """.formatted(
+                    requestId,
+                    userLabel(authorTelegramId),
+                    escapeHtml(abbreviate(normalized, 2_000))
+            ));
+        }
+        notifyUser(authorTelegramId, """
+                <b>Обращение отправлено</b>
+                Номер: <b>#%s</b>
+                Сообщение: %s
+
+                Супер-администратор увидит его в разделе «Помощь» модерации.
+                """.formatted(
+                requestId,
+                escapeHtml(abbreviate(normalized, 2_000))
+        ));
+        return requestId == null ? 0 : requestId;
+    }
+
+    public List<Map<String, Object>> supportRequests() {
+        return jdbc.queryForList("""
+                SELECT sr.id, sr.message, sr.status, sr.created_at,
+                       sr.author_telegram_id,
+                       COALESCE(NULLIF(author.display_name, ''),
+                         TRIM(author.first_name || ' ' || COALESCE(author.last_name, '')))
+                         AS author_name,
+                       author.username AS author_username,
+                       author.phone AS author_phone
+                FROM support_requests sr
+                JOIN users author ON author.telegram_id = sr.author_telegram_id
+                ORDER BY CASE sr.status WHEN 'PENDING' THEN 0 ELSE 1 END,
+                         sr.created_at DESC
+                """);
+    }
+
+    @Transactional
+    public void resolveSupportRequest(long requestId, long adminTelegramId) {
+        Map<String, Object> request = jdbc.queryForMap("""
+                SELECT author_telegram_id, status, message
+                FROM support_requests WHERE id = ?
+                """, requestId);
+        if (!"PENDING".equals(String.valueOf(request.get("status")))) {
+            throw new IllegalStateException("Обращение уже закрыто");
+        }
+        jdbc.update("""
+                UPDATE support_requests SET status = 'RESOLVED',
+                  resolved_by_telegram_id = ?, resolved_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, adminTelegramId, requestId);
+        notifyUser(((Number) request.get("author_telegram_id")).longValue(), """
+                <b>Обращение в помощь рассмотрено</b>
+                Номер: <b>#%s</b>
+                Ваше сообщение: %s
+
+                Если вопрос сохраняется, отправьте новое обращение через «Помощь».
+                """.formatted(
+                requestId,
+                escapeHtml(abbreviate(request.get("message"), 2_000))
+        ));
+    }
+
+    @Transactional
     public void resolveSellerReport(long reportId, long adminTelegramId, String action) {
         Map<String, Object> report = jdbc.queryForMap("""
                 SELECT reported_telegram_id, reporter_telegram_id, status,
@@ -2449,7 +2564,8 @@ public class MarketplaceService {
                    FROM group_commission_ledger l
                    WHERE l.group_id = g.id AND l.entry_type = 'ACCRUAL')
                     AS group_commission_kopecks,
-                  g.payment_details, g.image_url
+                  g.payment_details, g.payment_bank, g.payment_phone,
+                  g.payment_recipient_name, g.payment_sbp_link, g.image_url
                 FROM telegram_groups g
                 WHERE g.telegram_group_id = ? AND g.owner_telegram_id = ?
                 """, telegramGroupId, ownerTelegramId);
@@ -2458,7 +2574,8 @@ public class MarketplaceService {
     public Map<String, Object> globalSettings() {
         return jdbc.queryForMap("""
                 SELECT bot_commission_percent, default_debt_limit_kopecks,
-                       payment_details
+                       payment_details, payment_bank, payment_phone,
+                       payment_recipient_name, payment_sbp_link
                 FROM platform_settings WHERE singleton = 1
                 """);
     }
@@ -2466,26 +2583,42 @@ public class MarketplaceService {
     @Transactional
     public void updateGlobalSettings(double botCommissionPercent,
                                      long debtLimitKopecks,
-                                     String paymentDetails) {
+                                     String paymentBank,
+                                     String paymentPhone,
+                                     String paymentRecipientName,
+                                     String paymentSbpLink) {
+        PaymentMethod payment = normalizePaymentMethod(
+                paymentBank, paymentPhone, paymentRecipientName, paymentSbpLink
+        );
         jdbc.update("""
                 UPDATE platform_settings SET bot_commission_percent = ?,
                   default_debt_limit_kopecks = ?, payment_details = ?,
+                  payment_bank = ?, payment_phone = ?,
+                  payment_recipient_name = ?, payment_sbp_link = ?,
                   updated_at = CURRENT_TIMESTAMP
                 WHERE singleton = 1
-                """, botCommissionPercent, debtLimitKopecks,
-                paymentDetails == null ? "" : paymentDetails.strip());
+                """, botCommissionPercent, debtLimitKopecks, payment.details(),
+                payment.bank(), payment.phone(), payment.recipientName(),
+                payment.sbpLink());
     }
 
     @Transactional
     public void updateGroupCommission(long telegramGroupId, long ownerTelegramId,
                                       double commissionPercent,
-                                      String paymentDetails) {
+                                      String paymentBank,
+                                      String paymentPhone,
+                                      String paymentRecipientName,
+                                      String paymentSbpLink) {
+        PaymentMethod payment = normalizePaymentMethod(
+                paymentBank, paymentPhone, paymentRecipientName, paymentSbpLink
+        );
         int updated = jdbc.update("""
                 UPDATE telegram_groups SET commission_percent = ?,
-                  payment_details = ?
+                  payment_details = ?, payment_bank = ?, payment_phone = ?,
+                  payment_recipient_name = ?, payment_sbp_link = ?
                 WHERE telegram_group_id = ? AND owner_telegram_id = ?
-                """, commissionPercent,
-                paymentDetails == null ? "" : paymentDetails.strip(),
+                """, commissionPercent, payment.details(), payment.bank(),
+                payment.phone(), payment.recipientName(), payment.sbpLink(),
                 telegramGroupId, ownerTelegramId);
         if (updated == 0) throw new IllegalArgumentException("Group owner access required");
     }
@@ -3039,13 +3172,15 @@ public class MarketplaceService {
                                 String imageUrlsJson, String colorVariantsJson) {}
     public record NewStore(long groupId, String name, String description,
                            String imageUrl, String paymentBank,
-                           String paymentPhone, String paymentRecipientName) {}
+                           String paymentPhone, String paymentRecipientName,
+                           String paymentSbpLink) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
     public record OrderItem(long productId, int quantity, String selectedColorKey) {}
     public record ClubTopic(long telegramGroupId, int threadId) {}
     public record ClearResult(int stores, int products, int orders, int groupBuys) {}
     private record PaymentMethod(String bank, String phone,
-                                 String recipientName, String details) {}
+                                 String recipientName, String details,
+                                 String sbpLink) {}
     private record ProductColor(String key, String name, int stock) {}
     private record NormalizedColorVariants(String json, int totalStock) {}
 }

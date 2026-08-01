@@ -85,6 +85,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("payment_recipient_name")) {
             jdbc.execute("ALTER TABLE stores ADD COLUMN payment_recipient_name TEXT");
         }
+        if (!columns.contains("payment_sbp_link")) {
+            jdbc.execute("ALTER TABLE stores ADD COLUMN payment_sbp_link TEXT");
+        }
         jdbc.update("""
                 UPDATE stores
                 SET payment_details = COALESCE(
@@ -130,12 +133,36 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("payment_details")) {
             jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_details TEXT NOT NULL DEFAULT ''");
         }
+        if (!columns.contains("payment_bank")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_bank TEXT");
+        }
+        if (!columns.contains("payment_phone")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_phone TEXT");
+        }
+        if (!columns.contains("payment_recipient_name")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_recipient_name TEXT");
+        }
+        if (!columns.contains("payment_sbp_link")) {
+            jdbc.execute("ALTER TABLE telegram_groups ADD COLUMN payment_sbp_link TEXT");
+        }
     }
 
     private void ensureFinancialColumns(JdbcTemplate jdbc) {
         Set<String> platformColumns = columns(jdbc, "platform_settings");
         if (!platformColumns.contains("payment_details")) {
             jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_details TEXT NOT NULL DEFAULT ''");
+        }
+        if (!platformColumns.contains("payment_bank")) {
+            jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_bank TEXT");
+        }
+        if (!platformColumns.contains("payment_phone")) {
+            jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_phone TEXT");
+        }
+        if (!platformColumns.contains("payment_recipient_name")) {
+            jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_recipient_name TEXT");
+        }
+        if (!platformColumns.contains("payment_sbp_link")) {
+            jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_sbp_link TEXT");
         }
         Set<String> orderColumns = columns(jdbc, "orders");
         if (!orderColumns.contains("platform_commission_kopecks")) {

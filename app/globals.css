@@ -1324,6 +1324,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cart-fulfillment-field > span { color: #ddd; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .cart-fulfillment-field textarea { width: 100%; min-height: 96px; resize: vertical; border: 1px solid var(--line); background: #111; color: #eee; padding: 12px; font-size: 9px; line-height: 1.5; }
 .cart-fulfillment-field > small { color: #666; font-size: 7px; line-height: 1.5; }
+.sbp-link-hint { display: block; margin-top: 9px; color: #777; font-size: 8px; line-height: 1.55; }
+.commission-payment-list { display: grid; gap: 12px; margin-top: 20px; }
+.commission-payment-details { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); background: #111; }
+.commission-payment-details > b { color: #fff; font-size: 11px; text-transform: uppercase; }
+.commission-payment-details > span { color: #999; font-size: 9px; }
+.commission-payment-details > strong { color: var(--red-2); font-family: var(--font-oswald); font-size: 24px; }
+.commission-payment-details > button { margin-top: 5px; }
+.seller-debt-breakdown .commission-payment-details { margin-top: 10px; padding: 12px; background: rgba(0,0,0,.22); }
+.seller-only-help { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+.seller-only-help .section-kicker { margin-bottom: 8px; }
+.support-feedback-form { margin-top: 18px; }
+.support-feedback-form textarea { min-height: 130px; }
+.moderation-help-heading { margin-top: 26px; border-top: 2px solid rgba(84,184,232,.25); }
+.support-review-card { border-left-color: rgba(84,184,232,.55); }
+.regular-orders-heading { margin-top: 26px; }
 .order-fulfillment-details { margin: 12px 0; padding: 13px; border-left: 2px solid #6d7f92; background: #17191b; }
 .order-fulfillment-details > span { color: #778492; font-size: 7px; letter-spacing: .12em; }
 .order-fulfillment-details > p { margin: 6px 0 0; color: #bbb; font-size: 9px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }

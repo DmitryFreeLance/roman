@@ -26,7 +26,7 @@ public class ApiExceptionHandler {
                     "Набор в эту закупку уже завершён";
             case "Reservation is not payable" -> "Эту бронь сейчас нельзя оплатить";
             case "Not all participants are marked as paid" ->
-                    "Ещё не все участники отметили оплату";
+                    "Ещё не все участники подтвердили оплату";
             case "Category is not available" -> "Выбранная категория недоступна";
             case "Category name is required" -> "Введите название категории";
             case "Category was not created" -> "Не удалось создать категорию";

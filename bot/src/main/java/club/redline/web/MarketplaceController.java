@@ -204,7 +204,8 @@ public class MarketplaceController {
         long id = marketplace.createStore(user.id(), new NewStore(
                 request.groupId(), request.name(), request.description(),
                 request.imageUrl(), request.paymentBank(),
-                request.paymentPhone(), request.paymentRecipientName()
+                request.paymentPhone(), request.paymentRecipientName(),
+                request.paymentSbpLink()
         ));
         return Map.of("id", id);
     }
@@ -229,7 +230,8 @@ public class MarketplaceController {
         marketplace.updateStoreProfile(
                 registered(initData).id(), storeId,
                 request.name(), request.imageUrl(), request.paymentBank(),
-                request.paymentPhone(), request.paymentRecipientName()
+                request.paymentPhone(), request.paymentRecipientName(),
+                request.paymentSbpLink()
         );
     }
 
@@ -410,6 +412,16 @@ public class MarketplaceController {
         ));
     }
 
+    @PostMapping("/support")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Long> submitSupportRequest(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @Valid @RequestBody SupportRequest request) {
+        return Map.of("id", marketplace.submitSupportRequest(
+                registered(initData).id(), request.message()
+        ));
+    }
+
     @GetMapping("/me/notifications")
     public List<Map<String, Object>> notifications(
             @RequestHeader("X-Telegram-Init-Data") String initData) {
@@ -438,7 +450,9 @@ public class MarketplaceController {
                                       @Valid @RequestBody GroupCommissionRequest request) {
         marketplace.updateGroupCommission(
                 telegramGroupId, registered(initData).id(),
-                request.commissionPercent(), request.paymentDetails()
+                request.commissionPercent(), request.paymentBank(),
+                request.paymentPhone(), request.paymentRecipientName(),
+                request.paymentSbpLink()
         );
     }
 
@@ -592,6 +606,23 @@ public class MarketplaceController {
         return marketplace.sellerReports();
     }
 
+    @GetMapping("/admin/support")
+    public List<Map<String, Object>> supportRequests(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        requireSuperAdmin(initData);
+        return marketplace.supportRequests();
+    }
+
+    @PutMapping("/admin/support/{requestId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resolveSupportRequest(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long requestId) {
+        marketplace.resolveSupportRequest(
+                requestId, requireSuperAdmin(initData).id()
+        );
+    }
+
     @PutMapping("/admin/reports/{reportId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void resolveReport(
@@ -630,7 +661,8 @@ public class MarketplaceController {
         requireSuperAdmin(initData);
         marketplace.updateGlobalSettings(
                 request.botCommissionPercent(), request.debtLimitKopecks(),
-                request.paymentDetails()
+                request.paymentBank(), request.paymentPhone(),
+                request.paymentRecipientName(), request.paymentSbpLink()
         );
     }
 
@@ -691,7 +723,8 @@ public class MarketplaceController {
             @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
-            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
+            @Size(max = 500) String paymentSbpLink
     ) {}
     public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record StoreProfileRequest(
@@ -700,7 +733,8 @@ public class MarketplaceController {
             @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
-            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
+            @Size(max = 500) String paymentSbpLink
     ) {}
     public record UpdateProductRequest(
             @NotBlank String title,
@@ -737,11 +771,20 @@ public class MarketplaceController {
     public record FavoriteRequest(boolean favorite) {}
     public record ReviewRequest(@Min(1) @Max(5) int rating) {}
     public record SellerReportRequest(@NotBlank String reason) {}
+    public record SupportRequest(
+            @NotBlank @Size(min = 5, max = 2000) String message
+    ) {}
     public record OpenPaymentRequest(@Positive long finalPriceKopecks,
                                      @Min(1) @Max(72) int deadlineHours) {}
     public record DeliveryRequest(Instant from, Instant to, @NotBlank String note) {}
-    public record GroupCommissionRequest(@Min(0) @Max(30) double commissionPercent,
-                                         @NotBlank String paymentDetails) {}
+    public record GroupCommissionRequest(
+            @Min(0) @Max(30) double commissionPercent,
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            String paymentBank,
+            @NotBlank @Size(max = 30) String paymentPhone,
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
+            @Size(max = 500) String paymentSbpLink
+    ) {}
     public record GroupImageRequest(@NotBlank String imageUrl) {}
     public record AdminGroupRequest(@Min(0) @Max(30) double commissionPercent,
                                     @Positive long debtLimitKopecks,
@@ -753,7 +796,13 @@ public class MarketplaceController {
     public record RepayDebtRequest(@Positive long amountKopecks) {}
     public record SellerFinanceRequest(@Min(0) @Max(30) double commissionPercent,
                                        @Positive long debtLimitKopecks) {}
-    public record GlobalSettingsRequest(@Min(0) @Max(30) double botCommissionPercent,
-                                        @Positive long debtLimitKopecks,
-                                        @NotBlank String paymentDetails) {}
+    public record GlobalSettingsRequest(
+            @Min(0) @Max(30) double botCommissionPercent,
+            @Positive long debtLimitKopecks,
+            @NotBlank @Pattern(regexp = "SBER|TBANK|ALFA|VTB")
+            String paymentBank,
+            @NotBlank @Size(max = 30) String paymentPhone,
+            @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
+            @Size(max = 500) String paymentSbpLink
+    ) {}
 }

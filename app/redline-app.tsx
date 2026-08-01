@@ -75,10 +75,18 @@ type SellerFinance = {
   platformDebtKopecks: number;
   platformDebtLimitKopecks: number;
   platformPaymentDetails: string;
+  platformPaymentBank?: PaymentBank;
+  platformPaymentPhone?: string;
+  platformPaymentRecipientName?: string;
+  platformPaymentSbpLink?: string;
   groupCommissionPercent: number;
   groupDebtKopecks: number;
   groupDebtLimitKopecks: number;
   groupPaymentDetails: string;
+  groupPaymentBank?: PaymentBank;
+  groupPaymentPhone?: string;
+  groupPaymentRecipientName?: string;
+  groupPaymentSbpLink?: string;
   platformBlocked: boolean;
   groupBlocked: boolean;
 };
@@ -199,6 +207,7 @@ type SellerStore = {
   paymentBank?: PaymentBank;
   paymentPhone?: string;
   paymentRecipientName?: string;
+  paymentSbpLink?: string;
 };
 
 type SellerProfileData = {
@@ -211,6 +220,7 @@ type SellerProfileData = {
   paymentBank?: PaymentBank;
   paymentPhone?: string;
   paymentRecipientName?: string;
+  paymentSbpLink?: string;
   listingCount: number;
   activeListingCount: number;
   completedSales: number;
@@ -244,6 +254,7 @@ type GroupBuyPurchase = {
   paymentBank?: PaymentBank;
   paymentPhone?: string;
   paymentRecipientName?: string;
+  paymentSbpLink?: string;
   targetCount: number;
   reservedCount: number;
   finalPriceKopecks?: number;
@@ -274,6 +285,7 @@ type Order = {
   paymentBank?: PaymentBank;
   paymentPhone?: string;
   paymentRecipientName?: string;
+  paymentSbpLink?: string;
   buyerName?: string;
   buyerTelegramId?: number;
   buyerUsername?: string;
@@ -403,55 +415,15 @@ const asPaymentBank = (value: unknown): PaymentBank | undefined => {
     : undefined;
 };
 
-const openBankTransfer = (
-  bank: PaymentBank,
-  phone: string,
-  amountKopecks: number,
-) => {
-  const phoneDigits = phone.replace(/\D/g, "");
-  const amount = (amountKopecks / 100).toFixed(2);
-  const query = new URLSearchParams({
-    phone: phoneDigits,
-    phoneNumber: phoneDigits,
-    amount,
-  }).toString();
-  const links: Record<
-    PaymentBank,
-    { app: string; web: string }
-  > = {
-    SBER: {
-      app: `sberbankonline://payments/transfer/by-phone?${query}`,
-      web: "https://online.sberbank.ru/CSAFront/index.do",
-    },
-    TBANK: {
-      app: `tinkoffbank://Main/PayByMobileNumber?${query}`,
-      web: "https://www.tbank.ru/login/",
-    },
-    ALFA: {
-      app: `alfabank://transfers/by-phone?${query}`,
-      web: "https://web.alfabank.ru/",
-    },
-    VTB: {
-      app: `vtb-online://payments/transfers/by-phone?${query}`,
-      web: "https://online.vtb.ru/login",
-    },
-  };
-  const target = links[bank];
-  let appOpened = false;
-  const onVisibilityChanged = () => {
-    if (document.visibilityState === "hidden") appOpened = true;
-  };
-  document.addEventListener("visibilitychange", onVisibilityChanged);
-  window.setTimeout(() => {
-    document.removeEventListener("visibilitychange", onVisibilityChanged);
-    if (appOpened) return;
-    if (window.Telegram?.WebApp?.openLink) {
-      window.Telegram.WebApp.openLink(target.web);
-    } else {
-      window.location.href = target.web;
-    }
-  }, 1800);
-  window.location.href = target.app;
+const openSbpLink = (link: string) => {
+  if (!/^https:\/\/qr\.nspk\.ru\//i.test(link)) {
+    throw new Error("Некорректная ссылка СБП");
+  }
+  if (window.Telegram?.WebApp?.openLink) {
+    window.Telegram.WebApp.openLink(link);
+  } else {
+    window.open(link, "_blank", "noopener,noreferrer");
+  }
 };
 
 const normalizeRussianPhone = (phone?: string) => {
@@ -464,16 +436,16 @@ const normalizeRussianPhone = (phone?: string) => {
   return "";
 };
 
-const copyPhoneToClipboard = (phone: string) => {
+const copyTextToClipboard = (text: string) => {
   const input = document.createElement("textarea");
-  input.value = phone;
+  input.value = text;
   input.readOnly = true;
   input.style.position = "fixed";
   input.style.opacity = "0";
   input.style.pointerEvents = "none";
   document.body.appendChild(input);
   input.select();
-  input.setSelectionRange(0, phone.length);
+  input.setSelectionRange(0, text.length);
   let copied = false;
   try {
     copied = document.execCommand("copy");
@@ -484,7 +456,7 @@ const copyPhoneToClipboard = (phone: string) => {
   }
   if (copied) return true;
   if (navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(phone).catch(() => {
+    void navigator.clipboard.writeText(text).catch(() => {
       // The visible notification still exposes the number if WebView blocks
       // clipboard permissions.
     });
@@ -511,7 +483,7 @@ const openTelegramDialog = (
   }
   const normalizedPhone = normalizeRussianPhone(phone);
   if (normalizedPhone) {
-    const copied = copyPhoneToClipboard(normalizedPhone);
+    const copied = copyTextToClipboard(normalizedPhone);
     onFeedback?.(
       copied
         ? `Номер ${normalizedPhone} скопирован для звонка`
@@ -569,10 +541,30 @@ const camelSellerFinance = (row: Record<string, unknown>): SellerFinance => ({
   platformDebtKopecks: asNumber(row.platform_debt_kopecks),
   platformDebtLimitKopecks: asNumber(row.platform_debt_limit_kopecks),
   platformPaymentDetails: String(row.platform_payment_details || ""),
+  platformPaymentBank: asPaymentBank(row.platform_payment_bank),
+  platformPaymentPhone: row.platform_payment_phone
+    ? String(row.platform_payment_phone)
+    : undefined,
+  platformPaymentRecipientName: row.platform_payment_recipient_name
+    ? String(row.platform_payment_recipient_name)
+    : undefined,
+  platformPaymentSbpLink: row.platform_payment_sbp_link
+    ? String(row.platform_payment_sbp_link)
+    : undefined,
   groupCommissionPercent: asNumber(row.group_commission_percent),
   groupDebtKopecks: asNumber(row.group_debt_kopecks),
   groupDebtLimitKopecks: asNumber(row.group_debt_limit_kopecks),
   groupPaymentDetails: String(row.group_payment_details || ""),
+  groupPaymentBank: asPaymentBank(row.group_payment_bank),
+  groupPaymentPhone: row.group_payment_phone
+    ? String(row.group_payment_phone)
+    : undefined,
+  groupPaymentRecipientName: row.group_payment_recipient_name
+    ? String(row.group_payment_recipient_name)
+    : undefined,
+  groupPaymentSbpLink: row.group_payment_sbp_link
+    ? String(row.group_payment_sbp_link)
+    : undefined,
   platformBlocked: asBoolean(row.platform_blocked),
   groupBlocked: asBoolean(row.group_blocked),
 });
@@ -703,6 +695,9 @@ const camelOrder = (row: Record<string, unknown>): Order => {
     paymentRecipientName: row.payment_recipient_name
       ? String(row.payment_recipient_name)
       : undefined,
+    paymentSbpLink: row.payment_sbp_link
+      ? String(row.payment_sbp_link)
+      : undefined,
     buyerName: row.buyer_name ? String(row.buyer_name) : undefined,
     buyerTelegramId: row.buyer_telegram_id
       ? asNumber(row.buyer_telegram_id)
@@ -730,6 +725,9 @@ const camelStore = (row: Record<string, unknown>): SellerStore => ({
   paymentRecipientName: row.payment_recipient_name
     ? String(row.payment_recipient_name)
     : undefined,
+  paymentSbpLink: row.payment_sbp_link
+    ? String(row.payment_sbp_link)
+    : undefined,
 });
 
 const camelSellerProfile = (
@@ -751,6 +749,9 @@ const camelSellerProfile = (
   paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
   paymentRecipientName: row.payment_recipient_name
     ? String(row.payment_recipient_name)
+    : undefined,
+  paymentSbpLink: row.payment_sbp_link
+    ? String(row.payment_sbp_link)
     : undefined,
   listingCount: asNumber(row.listing_count),
   activeListingCount: asNumber(row.active_listing_count),
@@ -817,6 +818,9 @@ const camelGroupBuyPurchase = (
     paymentPhone: row.payment_phone ? String(row.payment_phone) : undefined,
     paymentRecipientName: row.payment_recipient_name
       ? String(row.payment_recipient_name)
+      : undefined,
+    paymentSbpLink: row.payment_sbp_link
+      ? String(row.payment_sbp_link)
       : undefined,
     targetCount: asNumber(row.target_count),
     reservedCount: asNumber(row.reserved_count),
@@ -1804,7 +1808,7 @@ export function RedlineApp() {
         )}
 
         {screen === "balance" && profile && (
-          <Balance profile={profile} finance={sellerFinance} />
+          <Balance profile={profile} finance={sellerFinance} onToast={setToast} />
         )}
 
         {screen === "create" && profile && (
@@ -1849,7 +1853,9 @@ export function RedlineApp() {
           />
         )}
 
-        {screen === "help" && <Help />}
+        {screen === "help" && profile && (
+          <Help profile={profile} request={request} onToast={setToast} />
+        )}
 
       </div>
 
@@ -1859,6 +1865,7 @@ export function RedlineApp() {
           <SellerDebtModal
             finance={sellerFinance}
             clubTitle={selectedClub?.title || "текущий клуб"}
+            onToast={setToast}
             onClose={() => navigate("market")}
           />
         )}
@@ -2903,6 +2910,7 @@ function SellerProfileModal({
   const [paymentBank, setPaymentBank] = useState<PaymentBank>("SBER");
   const [paymentPhone, setPaymentPhone] = useState("");
   const [paymentRecipientName, setPaymentRecipientName] = useState("");
+  const [paymentSbpLink, setPaymentSbpLink] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [loading, setLoading] = useState(!!club);
@@ -2926,6 +2934,7 @@ function SellerProfileModal({
       setPaymentBank(next.paymentBank || "SBER");
       setPaymentPhone(next.paymentPhone || "");
       setPaymentRecipientName(next.paymentRecipientName || "");
+      setPaymentSbpLink(next.paymentSbpLink || "");
       setError("");
     } catch (loadError) {
       setError(
@@ -2952,6 +2961,7 @@ function SellerProfileModal({
         setPaymentBank(next.paymentBank || "SBER");
         setPaymentPhone(next.paymentPhone || "");
         setPaymentRecipientName(next.paymentRecipientName || "");
+        setPaymentSbpLink(next.paymentSbpLink || "");
         setError("");
       })
       .catch((loadError) => {
@@ -3004,6 +3014,7 @@ function SellerProfileModal({
           paymentBank,
           paymentPhone,
           paymentRecipientName,
+          paymentSbpLink,
         }),
       });
       setFile(null);
@@ -3147,6 +3158,20 @@ function SellerProfileModal({
                 />
                 <small>
                   Покупатель увидит имя и полный телефон перед переводом.
+                </small>
+              </label>
+              <label>
+                <span>Официальная ссылка СБП</span>
+                <input
+                  value={paymentSbpLink}
+                  onChange={(event) => setPaymentSbpLink(event.target.value)}
+                  inputMode="url"
+                  maxLength={500}
+                  placeholder="https://qr.nspk.ru/..."
+                />
+                <small>
+                  Необязательно. Получите ссылку или QR в своём банке и вставьте
+                  ссылку qr.nspk.ru — покупатель сможет выбрать любой свой банк.
                 </small>
               </label>
               {error && <p className="form-error">{error}</p>}
@@ -3809,6 +3834,12 @@ function OrdersPage({
           </div>
         </>
       )}
+      {mode === "purchases" && shownOrders.length > 0 && (
+        <div className="subsection-heading order-group-heading regular-orders-heading">
+          <h2>Обычные заказы</h2>
+          <p>Отдельные покупки с фиксированным количеством и ценой.</p>
+        </div>
+      )}
       {loading ? (
         <div className="empty-inline">Загружаем заказы…</div>
       ) : shownOrders.length ? (
@@ -3914,12 +3945,14 @@ function BankPaymentPanel({
   bank,
   phone,
   recipientName,
+  sbpLink,
   amountKopecks,
   onToast,
 }: {
   bank?: PaymentBank;
   phone?: string;
   recipientName?: string;
+  sbpLink?: string;
   amountKopecks: number;
   onToast: (message: string) => void;
 }) {
@@ -3951,23 +3984,44 @@ function BankPaymentPanel({
       </div>
       <p className="bank-payment-warning">
         Перед подтверждением перевода убедитесь, что приложение банка
-        показывает получателя «{recipientName}».
+        показывает получателя «{recipientName}» и сумму {formatPrice(amountKopecks)}.
+        Если продавец указал статическую СБП-ссылку без суммы, введите сумму
+        вручную.
       </p>
       <button
         type="button"
         className="main-action bank-open-action"
         onClick={() => {
-          try {
-            openBankTransfer(bank, phone, amountKopecks);
-            onToast(`Открываем ${paymentBankLabel(bank)}`);
-          } catch {
-            onToast("Не удалось открыть приложение банка");
+          if (sbpLink) {
+            try {
+              openSbpLink(sbpLink);
+              onToast("Открываем СБП — выберите свой банк");
+            } catch {
+              onToast("Не удалось открыть ссылку СБП");
+            }
+            return;
           }
+          const details = [
+            `Банк получателя: ${paymentBankLabel(bank)}`,
+            `Телефон: ${phone}`,
+            `Получатель: ${recipientName}`,
+            `Сумма: ${formatPrice(amountKopecks)}`,
+          ].join("\n");
+          copyTextToClipboard(details);
+          onToast("Реквизиты и сумма скопированы");
         }}
       >
-        <ExternalLink size={17} />
-        Открыть приложение банка · {formatPrice(amountKopecks)}
+        {sbpLink ? <ExternalLink size={17} /> : <Phone size={17} />}
+        {sbpLink
+          ? `Открыть СБП · ${formatPrice(amountKopecks)}`
+          : "Скопировать реквизиты и сумму"}
       </button>
+      {!sbpLink && (
+        <small className="sbp-link-hint">
+          Универсальная ссылка СБП не указана продавцом. Веб-версия банка не
+          откроется: вставьте скопированные данные в приложение своего банка.
+        </small>
+      )}
     </div>
   );
 }
@@ -4064,6 +4118,7 @@ function GroupBuyPurchaseCard({
                 bank={purchase.paymentBank}
                 phone={purchase.paymentPhone}
                 recipientName={purchase.paymentRecipientName}
+                sbpLink={purchase.paymentSbpLink}
                 amountKopecks={purchase.finalPriceKopecks}
                 onToast={onToast}
               />
@@ -4074,7 +4129,7 @@ function GroupBuyPurchaseCard({
         </div>
       )}
       {purchase.reservationStatus === "PAID" && (
-        <div className="paid-confirmation"><Check size={16} /> Вы отметили оплату. Продавец проверяет поступление.</div>
+        <div className="paid-confirmation"><Check size={16} /> Вы подтвердили оплату. Продавец проверяет поступление.</div>
       )}
       {purchase.deliveryFrom && (
         <div className="delivery-note">
@@ -4176,7 +4231,7 @@ function OrderCard({
   const reviewSavingRef = useRef(false);
   const steps = [
     { status: "AWAITING_PAYMENT", label: "Ожидает оплаты", text: "Покупатель переводит деньги продавцу" },
-    { status: "PAID", label: "Оплата отмечена", text: "Продавец проверяет поступление" },
+    { status: "PAID", label: "Оплата подтверждена", text: "Продавец проверяет поступление" },
     { status: "SHIPPED", label: "Отправлено", text: "Покупатель ожидает товар" },
     { status: "COMPLETED", label: "Завершено", text: "Получение подтверждено" },
   ];
@@ -4289,13 +4344,14 @@ function OrderCard({
                   bank={order.paymentBank}
                   phone={order.paymentPhone}
                   recipientName={order.paymentRecipientName}
+                  sbpLink={order.paymentSbpLink}
                   amountKopecks={order.buyerPriceKopecks}
                   onToast={onToast}
                 />
               )}
               {order.status === "PAID" && (
                 <div className="paid-confirmation">
-                  <Check size={16} /> Вы отметили оплату. Продавец проверяет
+                  <Check size={16} /> Вы подтвердили оплату. Продавец проверяет
                   поступление.
                 </div>
               )}
@@ -4594,6 +4650,7 @@ function CreateListing({
             paymentBank: String(form.get("paymentBank")),
             paymentPhone: String(form.get("paymentPhone")),
             paymentRecipientName: String(form.get("paymentRecipientName")),
+            paymentSbpLink: String(form.get("paymentSbpLink") || ""),
           }),
         });
       }
@@ -4729,6 +4786,19 @@ function CreateListing({
                 placeholder="Иван Иванович И."
               />
               <small>Покупатель проверит это имя перед подтверждением перевода.</small>
+            </label>
+            <label>
+              <span>Официальная ссылка СБП</span>
+              <input
+                name="paymentSbpLink"
+                inputMode="url"
+                maxLength={500}
+                placeholder="https://qr.nspk.ru/..."
+              />
+              <small>
+                Необязательно. Вставьте ссылку из QR, полученного в вашем банке,
+                чтобы покупатель мог выбрать любое банковское приложение.
+              </small>
             </label>
           </div>
         )}
@@ -4971,7 +5041,10 @@ function ClubAdmin({
 }) {
   const groupBuys = products.filter((product) => product.kind === "group");
   const [commission, setCommission] = useState(String(club.commissionPercent));
-  const [paymentDetails, setPaymentDetails] = useState("");
+  const [paymentBank, setPaymentBank] = useState<PaymentBank>("SBER");
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [paymentRecipientName, setPaymentRecipientName] = useState("");
+  const [paymentSbpLink, setPaymentSbpLink] = useState("");
   const [groupImageUrl, setGroupImageUrl] = useState(club.imageUrl || "");
   const [uploadingGroupImage, setUploadingGroupImage] = useState(false);
   const [sellerFinances, setSellerFinances] = useState<
@@ -5003,7 +5076,10 @@ function ClubAdmin({
             completedOrders: asNumber(row.completed_orders),
             groupCommissionKopecks: asNumber(row.group_commission_kopecks),
           });
-          setPaymentDetails(String(row.payment_details || ""));
+          setPaymentBank(asPaymentBank(row.payment_bank) || "SBER");
+          setPaymentPhone(String(row.payment_phone || ""));
+          setPaymentRecipientName(String(row.payment_recipient_name || ""));
+          setPaymentSbpLink(String(row.payment_sbp_link || ""));
           setGroupImageUrl(String(row.image_url || club.imageUrl || ""));
           setSellerFinances(financeRows);
         }
@@ -5042,7 +5118,10 @@ function ClubAdmin({
               method: "PUT",
               body: JSON.stringify({
                 commissionPercent: Number(commission),
-                paymentDetails,
+                paymentBank,
+                paymentPhone,
+                paymentRecipientName,
+                paymentSbpLink,
               }),
             });
             await onChanged();
@@ -5123,16 +5202,10 @@ function ClubAdmin({
             required
           />
         </label>
-        <label>
-          <span>Реквизиты для оплаты долга клубу</span>
-          <textarea
-            value={paymentDetails}
-            onChange={(event) => setPaymentDetails(event.target.value)}
-            rows={3}
-            placeholder="СБП, номер карты, получатель и комментарий к платежу"
-            required
-          />
-        </label>
+        <label><span>Банк получателя комиссии</span><select value={paymentBank} onChange={(event) => setPaymentBank(event.target.value as PaymentBank)} required>{PAYMENT_BANKS.map((bank) => <option key={bank.value} value={bank.value}>{bank.label}</option>)}</select></label>
+        <label><span>Телефон СБП</span><input value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} onBlur={() => { const normalized = normalizeRussianPhone(paymentPhone); if (normalized) setPaymentPhone(normalized); }} inputMode="tel" placeholder="+7, 7, 8 или 999…" required /></label>
+        <label><span>ФИО получателя</span><input value={paymentRecipientName} onChange={(event) => setPaymentRecipientName(event.target.value)} maxLength={100} placeholder="Иван Иванович И." required /></label>
+        <label><span>Официальная ссылка СБП</span><input value={paymentSbpLink} onChange={(event) => setPaymentSbpLink(event.target.value)} inputMode="url" maxLength={500} placeholder="https://qr.nspk.ru/..." /><small>Получите ссылку/QR в банке. По ней продавец сможет выбрать свой банк.</small></label>
         <button className="main-action" disabled={savingCommission}>
           {savingCommission ? "Сохраняем…" : "Сохранить настройки"}
         </button>
@@ -5514,7 +5587,7 @@ function GroupBuyAdminCard({
 
       {status === "AWAITING_PAYMENT" && (
         <div className="admin-action-panel">
-          <p>Проверьте поступления. Подтвердить закупку можно, когда все участники отметили оплату.</p>
+          <p>Проверьте поступления. Подтвердить закупку можно, когда все участники подтвердили оплату.</p>
           <button
             className="main-action"
             disabled={actionSaving}
@@ -5611,11 +5684,15 @@ function SuperAdmin({
   const [debts, setDebts] = useState<Record<string, unknown>[]>([]);
   const [users, setUsers] = useState<Record<string, unknown>[]>([]);
   const [reports, setReports] = useState<Record<string, unknown>[]>([]);
+  const [supportRequests, setSupportRequests] = useState<Record<string, unknown>[]>([]);
   const [userQuery, setUserQuery] = useState("");
   const [globalSettings, setGlobalSettings] = useState({
     commission: "",
     limitRubles: "",
-    paymentDetails: "",
+    paymentBank: "SBER" as PaymentBank,
+    paymentPhone: "",
+    paymentRecipientName: "",
+    paymentSbpLink: "",
   });
 
   useEffect(() => {
@@ -5626,23 +5703,28 @@ function SuperAdmin({
 
   async function loadAdminData() {
     try {
-      const [groupRows, debtRows, userRows, reportRows, settingsRow] = await Promise.all([
+      const [groupRows, debtRows, userRows, reportRows, supportRows, settingsRow] = await Promise.all([
         request<Record<string, unknown>[]>("/admin/groups"),
         request<Record<string, unknown>[]>("/admin/debts"),
         request<Record<string, unknown>[]>("/admin/users"),
         request<Record<string, unknown>[]>("/admin/reports"),
+        request<Record<string, unknown>[]>("/admin/support"),
         request<Record<string, unknown>>("/admin/settings"),
       ]);
       setAdminGroups(groupRows.map(camelAdminGroup));
       setDebts(debtRows);
       setUsers(userRows);
       setReports(reportRows);
+      setSupportRequests(supportRows);
       setGlobalSettings({
         commission: String(asNumber(settingsRow.bot_commission_percent)),
         limitRubles: String(
           Math.round(asNumber(settingsRow.default_debt_limit_kopecks) / 100),
         ),
-        paymentDetails: String(settingsRow.payment_details || ""),
+        paymentBank: asPaymentBank(settingsRow.payment_bank) || "SBER",
+        paymentPhone: String(settingsRow.payment_phone || ""),
+        paymentRecipientName: String(settingsRow.payment_recipient_name || ""),
+        paymentSbpLink: String(settingsRow.payment_sbp_link || ""),
       });
     } catch (adminError) {
       onToast(
@@ -5663,8 +5745,8 @@ function SuperAdmin({
         <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Пользователи</button>
         <button className={tab === "moderation" ? "active" : ""} onClick={() => setTab("moderation")}>
           Модерация
-          {reports.filter((report) => String(report.status) === "PENDING").length > 0 && (
-            <em>{reports.filter((report) => String(report.status) === "PENDING").length}</em>
+          {reports.filter((report) => String(report.status) === "PENDING").length + supportRequests.filter((item) => String(item.status) === "PENDING").length > 0 && (
+            <em>{reports.filter((report) => String(report.status) === "PENDING").length + supportRequests.filter((item) => String(item.status) === "PENDING").length}</em>
           )}
         </button>
       </div>
@@ -5680,7 +5762,10 @@ function SuperAdmin({
                 body: JSON.stringify({
                   botCommissionPercent: Number(globalSettings.commission),
                   debtLimitKopecks: Number(globalSettings.limitRubles) * 100,
-                  paymentDetails: globalSettings.paymentDetails,
+                  paymentBank: globalSettings.paymentBank,
+                  paymentPhone: globalSettings.paymentPhone,
+                  paymentRecipientName: globalSettings.paymentRecipientName,
+                  paymentSbpLink: globalSettings.paymentSbpLink,
                 }),
               });
               await loadAdminData();
@@ -5693,7 +5778,10 @@ function SuperAdmin({
           <div><h2>Комиссия платформы</h2><p className="settings-hint">Значения по умолчанию применяются к новым продавцам. Индивидуальные значения задаются во вкладке «Долги».</p></div>
           <label><span>Комиссия платформы, %</span><input type="number" min="0" max="30" step="0.1" value={globalSettings.commission} onChange={(event) => setGlobalSettings((current) => ({ ...current, commission: event.target.value }))} required /></label>
           <label><span>Лимит долга нового продавца, ₽</span><input type="number" min="1" step="1" value={globalSettings.limitRubles} onChange={(event) => setGlobalSettings((current) => ({ ...current, limitRubles: event.target.value }))} required /></label>
-          <label><span>Реквизиты супер-администратора</span><textarea rows={4} value={globalSettings.paymentDetails} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentDetails: event.target.value }))} placeholder="СБП, номер карты, получатель и назначение платежа" required /></label>
+          <label><span>Банк супер-администратора</span><select value={globalSettings.paymentBank} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentBank: event.target.value as PaymentBank }))} required>{PAYMENT_BANKS.map((bank) => <option key={bank.value} value={bank.value}>{bank.label}</option>)}</select></label>
+          <label><span>Телефон СБП</span><input value={globalSettings.paymentPhone} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentPhone: event.target.value }))} onBlur={() => setGlobalSettings((current) => ({ ...current, paymentPhone: normalizeRussianPhone(current.paymentPhone) || current.paymentPhone }))} inputMode="tel" placeholder="+7, 7, 8 или 999…" required /></label>
+          <label><span>ФИО получателя</span><input value={globalSettings.paymentRecipientName} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentRecipientName: event.target.value }))} maxLength={100} placeholder="Иван Иванович И." required /></label>
+          <label><span>Официальная ссылка СБП</span><input value={globalSettings.paymentSbpLink} onChange={(event) => setGlobalSettings((current) => ({ ...current, paymentSbpLink: event.target.value }))} inputMode="url" maxLength={500} placeholder="https://qr.nspk.ru/..." /><small>Получите ссылку/QR в банке. Продавец сможет открыть её и выбрать свой банк.</small></label>
           <button className="main-action" disabled={saving}>{saving ? "Сохраняем…" : "Сохранить настройки"}</button>
         </form>
       )}
@@ -5837,7 +5925,7 @@ function SuperAdmin({
             }[String(report.status)] || String(report.status);
             return (
               <article className={`report-review-card ${pending ? "pending" : ""}`} key={reportId}>
-                <div className="report-review-head"><AlertTriangle size={18} /><div><b>{String(report.reported_name || `ID ${report.reported_telegram_id}`)}{report.reported_username ? ` · @${String(report.reported_username)}` : ""}</b><small>Telegram ID: {String(report.reported_telegram_id)} · Жалоба #{reportId} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
+                <div className="report-review-head"><AlertTriangle size={18} /><div><b>Жалоба #{reportId} · {String(report.reported_name || `ID ${report.reported_telegram_id}`)}{report.reported_username ? ` · @${String(report.reported_username)}` : ""}</b><small>Telegram ID: {String(report.reported_telegram_id)} · {report.order_id ? `заказ #${String(report.order_id)}` : `закупка #${String(report.group_buy_id)}`} · {String(report.product_title)}</small></div><em>{reportStatus}</em></div>
                 <p>{String(report.reason)}</p>
                 <small>От: {String(report.reporter_name || report.reporter_telegram_id)}{report.reporter_username ? ` · @${String(report.reporter_username)}` : ""} · Telegram ID: {String(report.reporter_telegram_id)} · {formatMoscowDateTime(String(report.created_at))} МСК</small>
                 <div className="report-review-actions">
@@ -5898,6 +5986,22 @@ function SuperAdmin({
             );
           })}
           {!reports.length && <div className="empty-inline">Жалоб пока нет.</div>}
+          <div className="table-heading moderation-help-heading"><div><h2>Помощь</h2><p>Ошибки приложения и пожелания пользователей. Эти сообщения не являются жалобами.</p></div></div>
+          {supportRequests.map((item) => {
+            const requestId = asNumber(item.id);
+            const pending = String(item.status) === "PENDING";
+            return (
+              <article className={`report-review-card support-review-card ${pending ? "pending" : ""}`} key={`support-${requestId}`}>
+                <div className="report-review-head"><CircleHelp size={18} /><div><b>Помощь #{requestId} · {String(item.author_name || `ID ${item.author_telegram_id}`)}</b><small>{item.author_username ? `@${String(item.author_username)} · ` : ""}Telegram ID: {String(item.author_telegram_id)} · {formatMoscowDateTime(String(item.created_at))} МСК</small></div><em>{pending ? "НОВОЕ" : "ЗАКРЫТО"}</em></div>
+                <p>{String(item.message)}</p>
+                <div className="report-review-actions">
+                  <button className="contact-action" onClick={() => openTelegramDialog(asNumber(item.author_telegram_id), item.author_username ? String(item.author_username) : undefined, item.author_phone ? String(item.author_phone) : undefined, onToast)}>{item.author_username ? <MessageCircle size={15} /> : <Phone size={15} />} Связаться</button>
+                  {pending && <button onClick={async () => { try { await request(`/admin/support/${requestId}`, { method: "PUT" }); await loadAdminData(); onToast("Обращение помощи закрыто"); } catch (supportError) { onToast(supportError instanceof Error ? supportError.message : "Не удалось закрыть обращение"); } }}>Закрыть обращение</button>}
+                </div>
+              </article>
+            );
+          })}
+          {!supportRequests.length && <div className="empty-inline">Обращений в помощь пока нет.</div>}
         </div>
       )}
     </section>
@@ -5951,12 +6055,69 @@ function AdminGroupRow({
   );
 }
 
+function CommissionPaymentDetails({
+  title,
+  bank,
+  phone,
+  recipientName,
+  sbpLink,
+  amountKopecks,
+  onToast,
+}: {
+  title: string;
+  bank?: PaymentBank;
+  phone?: string;
+  recipientName?: string;
+  sbpLink?: string;
+  amountKopecks: number;
+  onToast: (message: string) => void;
+}) {
+  if (!bank || !phone || !recipientName) {
+    return <div className="empty-inline">Реквизиты {title.toLowerCase()} пока не указаны.</div>;
+  }
+  return (
+    <div className="commission-payment-details">
+      <b>{title}</b>
+      <span>{paymentBankLabel(bank)} · {phone}</span>
+      <span>{recipientName}</span>
+      <strong>{formatPrice(amountKopecks)}</strong>
+      <button
+        type="button"
+        className="outline-action"
+        onClick={() => {
+          if (sbpLink) {
+            try {
+              openSbpLink(sbpLink);
+              onToast("Открываем СБП — выберите свой банк");
+            } catch {
+              onToast("Не удалось открыть ссылку СБП");
+            }
+            return;
+          }
+          copyTextToClipboard([
+            `Банк: ${paymentBankLabel(bank)}`,
+            `Телефон: ${phone}`,
+            `Получатель: ${recipientName}`,
+            `Сумма: ${formatPrice(amountKopecks)}`,
+          ].join("\n"));
+          onToast("Реквизиты комиссии и сумма скопированы");
+        }}
+      >
+        {sbpLink ? <ExternalLink size={15} /> : <Phone size={15} />}
+        {sbpLink ? "Открыть СБП" : "Скопировать реквизиты"}
+      </button>
+    </div>
+  );
+}
+
 function Balance({
   profile,
   finance,
+  onToast,
 }: {
   profile: Profile;
   finance: SellerFinance | null;
+  onToast: (message: string) => void;
 }) {
   const platformDebt =
     finance?.platformDebtKopecks ?? profile.commissionDebtKopecks;
@@ -5990,6 +6151,14 @@ function Balance({
           <p>Лимит блокировки: {formatPrice(finance.groupDebtLimitKopecks)}</p>
         </div>
       )}
+      {finance && (
+        <div className="commission-payment-list">
+          <div className="subsection-heading"><h2>Оплата долгов</h2><p>Реквизиты доступны здесь всегда, а не только после блокировки.</p></div>
+          <CommissionPaymentDetails title="Платформа" bank={finance.platformPaymentBank} phone={finance.platformPaymentPhone} recipientName={finance.platformPaymentRecipientName} sbpLink={finance.platformPaymentSbpLink} amountKopecks={finance.platformDebtKopecks} onToast={onToast} />
+          <CommissionPaymentDetails title="Администратор клуба" bank={finance.groupPaymentBank} phone={finance.groupPaymentPhone} recipientName={finance.groupPaymentRecipientName} sbpLink={finance.groupPaymentSbpLink} amountKopecks={finance.groupDebtKopecks} onToast={onToast} />
+          <p className="settings-hint">После перевода дождитесь, пока соответствующий администратор подтвердит погашение долга.</p>
+        </div>
+      )}
     </section>
   );
 }
@@ -5997,10 +6166,12 @@ function Balance({
 function SellerDebtModal({
   finance,
   clubTitle,
+  onToast,
   onClose,
 }: {
   finance: SellerFinance;
   clubTitle: string;
+  onToast: (message: string) => void;
   onClose: () => void;
 }) {
   return (
@@ -6015,7 +6186,7 @@ function SellerDebtModal({
             <b>{formatPrice(finance.platformDebtKopecks)}</b>
             <small>Лимит {formatPrice(finance.platformDebtLimitKopecks)} · комиссия {finance.platformCommissionPercent}%</small>
             {finance.platformBlocked && (
-              <p><strong>Реквизиты супер-администратора</strong>{finance.platformPaymentDetails || "Реквизиты пока не указаны. Свяжитесь с супер-администратором."}</p>
+              <CommissionPaymentDetails title="Супер-администратор" bank={finance.platformPaymentBank} phone={finance.platformPaymentPhone} recipientName={finance.platformPaymentRecipientName} sbpLink={finance.platformPaymentSbpLink} amountKopecks={finance.platformDebtKopecks} onToast={onToast} />
             )}
           </article>
           <article className={finance.groupBlocked ? "blocked" : ""}>
@@ -6023,7 +6194,7 @@ function SellerDebtModal({
             <b>{formatPrice(finance.groupDebtKopecks)}</b>
             <small>Лимит {formatPrice(finance.groupDebtLimitKopecks)} · комиссия {finance.groupCommissionPercent}%</small>
             {finance.groupBlocked && (
-              <p><strong>Реквизиты администратора клуба</strong>{finance.groupPaymentDetails || "Реквизиты пока не указаны. Свяжитесь с администратором клуба."}</p>
+              <CommissionPaymentDetails title="Администратор клуба" bank={finance.groupPaymentBank} phone={finance.groupPaymentPhone} recipientName={finance.groupPaymentRecipientName} sbpLink={finance.groupPaymentSbpLink} amountKopecks={finance.groupDebtKopecks} onToast={onToast} />
             )}
           </article>
         </div>
@@ -6122,7 +6293,17 @@ function EmptySection({ title, text, action }: { title: string; text: string; ac
   );
 }
 
-function Help() {
+function Help({
+  profile,
+  request,
+  onToast,
+}: {
+  profile: Profile;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onToast: (message: string) => void;
+}) {
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
   return (
     <section className="inner-page narrow-page">
       <div className="page-title"><span className="section-kicker">SUPPORT</span><h1>Помощь</h1><p>Как подключить и использовать REDLINE</p></div>
@@ -6131,27 +6312,41 @@ function Help() {
         <p className="settings-hint">Добавьте бота в Telegram-группу, включите темы, назначьте бота администратором и разрешите управление темами. Бот создаст тему «Магазин» автоматически.</p>
         <h2>Групповые закупки</h2>
         <p className="settings-hint">После достижения порога продавец фиксирует актуальную цену и отправляет участникам запрос оплаты.</p>
-        <h2>Как продавец оплачивает комиссии</h2>
-        <p className="settings-hint">
-          Комиссия начисляется только после завершения заказа. Для продавца
-          ведутся два независимых долга: платформе и администратору клуба. У
-          каждого долга есть собственные комиссия и лимит.
-        </p>
-        <h2>Где посмотреть сумму и реквизиты</h2>
-        <p className="settings-hint">
-          Откройте «Баланс и комиссии» в меню. Там указаны текущие долги,
-          лимиты и реквизиты супер-администратора и администратора клуба. Пункт
-          появляется после создания первого объявления.
-        </p>
-        <h2>Что происходит при достижении лимита</h2>
-        <p className="settings-hint">
-          Объявления временно скрываются, а создание новых и приём заказов
-          блокируются. В разделах продавца показывается сумма долга и реквизиты.
-          Переведите необходимую сумму получателю комиссии. После того как
-          соответствующий администратор подтвердит платёж, долг уменьшится и
-          продажи восстановятся автоматически.
-        </p>
+        {profile.listingCount > 0 && (
+          <div className="seller-only-help">
+            <span className="section-kicker">ТОЛЬКО ДЛЯ ПРОДАВЦОВ</span>
+            <h2>Как продавец оплачивает комиссии</h2>
+            <p className="settings-hint">Комиссия начисляется только после завершения заказа. Для продавца ведутся два независимых долга: платформе и администратору клуба.</p>
+            <h2>Где посмотреть сумму и реквизиты</h2>
+            <p className="settings-hint">Откройте «Баланс и комиссии». Там всегда указаны долги, лимиты, банк, телефон, получатель и кнопка СБП/копирования реквизитов. После перевода администратор подтверждает погашение.</p>
+            <h2>Что происходит при достижении лимита</h2>
+            <p className="settings-hint">Объявления временно скрываются, а публикация и продажи блокируются до подтверждения погашения достигнутого лимита.</p>
+          </div>
+        )}
       </div>
+      <form
+        className="settings-card support-feedback-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSending(true);
+          try {
+            await request("/support", {
+              method: "POST",
+              body: JSON.stringify({ message }),
+            });
+            setMessage("");
+            onToast("Обращение отправлено супер-администратору");
+          } catch (supportError) {
+            onToast(supportError instanceof Error ? supportError.message : "Не удалось отправить обращение");
+          } finally {
+            setSending(false);
+          }
+        }}
+      >
+        <div><h2>Сообщить об ошибке или предложить улучшение</h2><p className="settings-hint">Это обращение попадёт в отдельный подраздел «Помощь» в модерации и не будет считаться жалобой на продавца.</p></div>
+        <label><span>Сообщение</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} minLength={5} maxLength={2000} rows={6} placeholder="Опишите ошибку, экран и последовательность действий…" required /></label>
+        <button className="main-action" disabled={sending || message.trim().length < 5}>{sending ? "Отправляем…" : "Отправить в помощь"}</button>
+      </form>
     </section>
   );
 }

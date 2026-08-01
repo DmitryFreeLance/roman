@@ -77,9 +77,16 @@ class MarketplaceServiceSqliteTest {
         marketplace.updateGroupImage(
                 -100123L, sellerId, "https://example.test/club.jpg"
         );
+        marketplace.updateGroupCommission(
+                -100123L, sellerId, 3.5, "TBANK", "89990000001",
+                "Администратор клуба А.",
+                "https://qr.nspk.ru/AS40003P3RH0LJ2A9ROO038L6NT5RU1M"
+        );
         assertThat(marketplace.availableGroups()).singleElement()
                 .satisfies(row -> assertThat(row.get("image_url"))
                         .isEqualTo("https://example.test/club.jpg"));
+        assertThat(marketplace.groupAdminStats(-100123L, sellerId)
+                .get("payment_phone")).isEqualTo("+79990000001");
 
         Long groupId = jdbc.queryForObject(
                 "SELECT id FROM telegram_groups WHERE telegram_group_id = ?",
@@ -88,7 +95,8 @@ class MarketplaceServiceSqliteTest {
         marketplace.createStore(sellerId, new MarketplaceService.NewStore(
                 groupId, "Garage", "Test store",
                 "https://example.test/store.jpg",
-                "SBER", "+7 000 000-00-00", "Иван Иванович И."
+                "SBER", "+7 000 000-00-00", "Иван Иванович И.",
+                "https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO038L6NT5RU1M"
         ));
         long productId = marketplace.createProduct(sellerId, new MarketplaceService.NewProduct(
                 groupId, "Brake kit", "Track brake kit", "Комплект на одну ось", "Brakes",
@@ -122,7 +130,8 @@ class MarketplaceServiceSqliteTest {
         marketplace.updateStoreProfile(
                 sellerId, storeId, "Garage Pro",
                 "https://example.test/store-profile.jpg",
-                "TBANK", "+7 999 000-00-00", "Пётр Петрович П."
+                "TBANK", "+7 999 000-00-00", "Пётр Петрович П.",
+                "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M"
         );
         assertThat(marketplace.myStore(sellerId, -100123L).get("image_url"))
                 .isEqualTo("https://example.test/store-profile.jpg");
@@ -134,6 +143,10 @@ class MarketplaceServiceSqliteTest {
                 .get("payment_phone")).isEqualTo("+79990000000");
         assertThat(marketplace.sellerProfile(sellerId, -100123L)
                 .get("payment_recipient_name")).isEqualTo("Пётр Петрович П.");
+        assertThat(marketplace.sellerProfile(sellerId, -100123L)
+                .get("payment_sbp_link")).isEqualTo(
+                        "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M"
+                );
         Long groupBuyId = jdbc.queryForObject(
                 "SELECT id FROM group_buys WHERE product_id = ?", Long.class, productId
         );
@@ -163,6 +176,9 @@ class MarketplaceServiceSqliteTest {
                             .isEqualTo(103_075L);
                     assertThat(row.get("payment_bank")).isEqualTo("TBANK");
                     assertThat(row.get("payment_phone")).isEqualTo("+79990000000");
+                    assertThat(row.get("payment_sbp_link")).isEqualTo(
+                            "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M"
+                    );
                     assertThat(row.get("seller_phone")).isEqualTo("+70000000000");
                     assertThat(row.get("payment_recipient_name"))
                             .isEqualTo("Пётр Петрович П.");
@@ -204,6 +220,9 @@ class MarketplaceServiceSqliteTest {
                     assertThat(((Number) row.get("id")).longValue()).isEqualTo(orderId);
                     assertThat(row.get("payment_bank")).isEqualTo("TBANK");
                     assertThat(row.get("payment_phone")).isEqualTo("+79990000000");
+                    assertThat(row.get("payment_sbp_link")).isEqualTo(
+                            "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M"
+                    );
                     assertThat(row.get("seller_phone")).isEqualTo("+70000000000");
                     assertThat(row.get("payment_recipient_name"))
                             .isEqualTo("Пётр Петрович П.");
@@ -408,11 +427,17 @@ class MarketplaceServiceSqliteTest {
                         assertThat(row.get("phone"))
                                 .isEqualTo("+70000000000"));
 
-        marketplace.updateGlobalSettings(0, 50_000L, "СБП +7 900 000-00-00");
+        marketplace.updateGlobalSettings(
+                0, 50_000L, "SBER", "+7 900 000-00-00",
+                "Администратор А.",
+                "https://qr.nspk.ru/AS30003P3RH0LJ2A9ROO038L6NT5RU1M"
+        );
         assertThat(((Number) marketplace.globalSettings()
                 .get("bot_commission_percent")).doubleValue()).isZero();
-        assertThat(marketplace.globalSettings().get("payment_details"))
-                .isEqualTo("СБП +7 900 000-00-00");
+        assertThat(marketplace.globalSettings().get("payment_phone"))
+                .isEqualTo("+79000000000");
+        assertThat(marketplace.globalSettings().get("payment_sbp_link"))
+                .isEqualTo("https://qr.nspk.ru/AS30003P3RH0LJ2A9ROO038L6NT5RU1M");
 
         long reportId = marketplace.submitSellerReport(
                 firstBuyerId, orderId, "Продавец долго не отвечал"
@@ -426,6 +451,23 @@ class MarketplaceServiceSqliteTest {
         assertThat(marketplace.sellerReports())
                 .singleElement()
                 .satisfies(row -> assertThat(row.get("status")).isEqualTo("DISMISSED"));
+        long supportId = marketplace.submitSupportRequest(
+                firstBuyerId, "На экране корзины не помещается длинный адрес"
+        );
+        assertThat(marketplace.supportRequests())
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("id")).longValue())
+                            .isEqualTo(supportId);
+                    assertThat(row.get("status")).isEqualTo("PENDING");
+                    assertThat(row.get("message")).asString()
+                            .contains("экране корзины");
+                });
+        marketplace.resolveSupportRequest(supportId, 1L);
+        assertThat(marketplace.supportRequests())
+                .singleElement()
+                .satisfies(row -> assertThat(row.get("status"))
+                        .isEqualTo("RESOLVED"));
         assertThat(marketplace.users("seller"))
                 .anySatisfy(row ->
                         assertThat(((Number) row.get("telegram_id")).longValue())

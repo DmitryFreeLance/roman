@@ -7,6 +7,10 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   bot_commission_percent REAL NOT NULL DEFAULT 5.0,
   default_debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
   payment_details TEXT NOT NULL DEFAULT '',
+  payment_bank TEXT,
+  payment_phone TEXT,
+  payment_recipient_name TEXT,
+  payment_sbp_link TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -63,6 +67,10 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
   commission_percent REAL NOT NULL DEFAULT 3.5,
   debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
   payment_details TEXT NOT NULL DEFAULT '',
+  payment_bank TEXT,
+  payment_phone TEXT,
+  payment_recipient_name TEXT,
+  payment_sbp_link TEXT,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -77,6 +85,7 @@ CREATE TABLE IF NOT EXISTS stores (
   payment_phone TEXT,
   payment_bank TEXT,
   payment_recipient_name TEXT,
+  payment_sbp_link TEXT,
   payment_card TEXT,
   payment_details TEXT,
   rating REAL NOT NULL DEFAULT 0,
@@ -242,6 +251,20 @@ CREATE TABLE IF NOT EXISTS seller_reports (
 
 CREATE INDEX IF NOT EXISTS seller_reports_status_idx
   ON seller_reports(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS support_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  author_telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING', 'RESOLVED')),
+  resolved_by_telegram_id INTEGER REFERENCES users(telegram_id),
+  resolved_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS support_requests_status_idx
+  ON support_requests(status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

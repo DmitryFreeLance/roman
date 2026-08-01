@@ -35,7 +35,7 @@ class SqliteSchemaInitializerTest {
                   'users', 'telegram_groups', 'stores', 'products',
                   'group_buys', 'group_buy_reservations', 'orders', 'reviews',
                   'notifications', 'seller_reports', 'favorites',
-                  'product_discussion_messages'
+                  'product_discussion_messages', 'support_requests'
                 )
                 """, Integer.class);
         Integer settings = jdbc.queryForObject(
@@ -50,7 +50,7 @@ class SqliteSchemaInitializerTest {
                 """, Integer.class);
 
         assertThat(foreignKeys).isEqualTo(1);
-        assertThat(tables).isEqualTo(12);
+        assertThat(tables).isEqualTo(13);
         assertThat(settings).isEqualTo(1);
         assertThat(businessRows).isEqualTo(9);
         assertThat(jdbc.queryForList(
@@ -61,14 +61,20 @@ class SqliteSchemaInitializerTest {
                 "PRAGMA table_info(stores)"
         )).extracting(row -> String.valueOf(row.get("name")))
                 .contains("payment_bank", "payment_phone",
-                        "payment_recipient_name");
+                        "payment_recipient_name", "payment_sbp_link");
         assertThat(jdbc.queryForList(
                 "PRAGMA table_info(telegram_groups)"
         )).extracting(row -> String.valueOf(row.get("name")))
-                .contains("image_url");
+                .contains("image_url", "payment_bank", "payment_phone",
+                        "payment_recipient_name", "payment_sbp_link");
         assertThat(jdbc.queryForList(
                 "PRAGMA table_info(orders)"
         )).extracting(row -> String.valueOf(row.get("name")))
                 .contains("fulfillment_details");
+        assertThat(jdbc.queryForList(
+                "PRAGMA table_info(platform_settings)"
+        )).extracting(row -> String.valueOf(row.get("name")))
+                .contains("payment_bank", "payment_phone",
+                        "payment_recipient_name", "payment_sbp_link");
     }
 }
