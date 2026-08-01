@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -1395,13 +1396,20 @@ public class MarketplaceService {
     private String normalizeSbpLink(String sbpLink) {
         String normalized = sbpLink == null ? "" : sbpLink.strip();
         if (normalized.isEmpty()) return "";
-        if (!normalized.matches(
-                "https://(?:qr\\.nspk\\.ru|c2c\\.cbrpay\\.ru)/[A-Za-z0-9]+(?:\\?.*)?")) {
+        try {
+            URI link = URI.create(normalized);
+            if (!"https".equalsIgnoreCase(link.getScheme())
+                    || link.getHost() == null
+                    || link.getHost().isBlank()
+                    || link.getUserInfo() != null) {
+                throw new IllegalArgumentException();
+            }
+            return link.toString();
+        } catch (IllegalArgumentException error) {
             throw new IllegalArgumentException(
-                    "Используйте ссылку https://qr.nspk.ru/ или https://c2c.cbrpay.ru/"
+                    "Платёжная ссылка должна быть корректным адресом https://"
             );
         }
-        return normalized;
     }
 
     public List<Map<String, Object>> purchaseOrders(long buyerTelegramId,

@@ -430,7 +430,7 @@ class MarketplaceServiceSqliteTest {
         marketplace.updateGlobalSettings(
                 0, 50_000L, "GAZPROM", "+7 900 000-00-00",
                 "Администратор А.",
-                "https://c2c.cbrpay.ru/BS1I004GI73TM0HS85T8Q092TI8AK25Q"
+                "https://payments.example.test/personal-transfer/123"
         );
         assertThat(((Number) marketplace.globalSettings()
                 .get("bot_commission_percent")).doubleValue()).isZero();
@@ -439,7 +439,7 @@ class MarketplaceServiceSqliteTest {
         assertThat(marketplace.globalSettings().get("payment_phone"))
                 .isEqualTo("+79000000000");
         assertThat(marketplace.globalSettings().get("payment_sbp_link"))
-                .isEqualTo("https://c2c.cbrpay.ru/BS1I004GI73TM0HS85T8Q092TI8AK25Q");
+                .isEqualTo("https://payments.example.test/personal-transfer/123");
 
         long reportId = marketplace.submitSellerReport(
                 firstBuyerId, orderId, "Продавец долго не отвечал"
