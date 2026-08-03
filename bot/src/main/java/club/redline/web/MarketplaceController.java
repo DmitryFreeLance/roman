@@ -491,10 +491,11 @@ public class MarketplaceController {
             @RequestHeader("X-Telegram-Init-Data") String initData,
             @PathVariable long telegramGroupId,
             @PathVariable long sellerTelegramId,
-            @Valid @RequestBody SellerFinanceRequest request) {
+            @Valid @RequestBody GroupSellerFinanceRequest request) {
         marketplace.updateGroupSellerFinance(
                 telegramGroupId, registered(initData).id(), sellerTelegramId,
-                request.commissionPercent(), request.debtLimitKopecks()
+                request.commissionPercent(), request.debtLimitKopecks(),
+                request.verifiedSeller()
         );
     }
 
@@ -796,6 +797,11 @@ public class MarketplaceController {
     public record RepayDebtRequest(@Positive long amountKopecks) {}
     public record SellerFinanceRequest(@Min(0) @Max(30) double commissionPercent,
                                        @Positive long debtLimitKopecks) {}
+    public record GroupSellerFinanceRequest(
+            @Min(0) @Max(30) double commissionPercent,
+            @Positive long debtLimitKopecks,
+            boolean verifiedSeller
+    ) {}
     public record GlobalSettingsRequest(
             @Min(0) @Max(30) double botCommissionPercent,
             @Positive long debtLimitKopecks,

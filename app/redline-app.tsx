@@ -87,6 +87,7 @@ type SellerFinance = {
   groupPaymentPhone?: string;
   groupPaymentRecipientName?: string;
   groupPaymentSbpLink?: string;
+  verifiedSeller: boolean;
   platformBlocked: boolean;
   groupBlocked: boolean;
 };
@@ -143,6 +144,7 @@ type Product = {
   sellerName?: string;
   sellerUsername?: string;
   sellerPhone?: string;
+  verifiedSeller: boolean;
   active: boolean;
   orderCount: number;
   rating: number;
@@ -194,6 +196,7 @@ type Storefront = {
   productCount: number;
   cover?: string;
   rating: number;
+  verifiedSeller: boolean;
 };
 
 type PaymentBank = "SBER" | "TBANK" | "ALFA" | "VTB" | "GAZPROM";
@@ -221,6 +224,7 @@ type SellerProfileData = {
   paymentPhone?: string;
   paymentRecipientName?: string;
   paymentSbpLink?: string;
+  verifiedSeller: boolean;
   listingCount: number;
   activeListingCount: number;
   completedSales: number;
@@ -576,6 +580,7 @@ const camelSellerFinance = (row: Record<string, unknown>): SellerFinance => ({
   groupPaymentSbpLink: row.group_payment_sbp_link
     ? String(row.group_payment_sbp_link)
     : undefined,
+  verifiedSeller: asBoolean(row.verified_seller),
   platformBlocked: asBoolean(row.platform_blocked),
   groupBlocked: asBoolean(row.group_blocked),
 });
@@ -652,6 +657,7 @@ const camelProduct = (row: Record<string, unknown>): Product => {
     sellerName: row.seller_name ? String(row.seller_name) : undefined,
     sellerUsername: row.seller_username ? String(row.seller_username) : undefined,
     sellerPhone: row.seller_phone ? String(row.seller_phone) : undefined,
+    verifiedSeller: asBoolean(row.verified_seller),
     active: row.active === undefined ? true : asBoolean(row.active),
     orderCount: asNumber(row.order_count),
     rating: asNumber(row.rating),
@@ -764,6 +770,7 @@ const camelSellerProfile = (
   paymentSbpLink: row.payment_sbp_link
     ? String(row.payment_sbp_link)
     : undefined,
+  verifiedSeller: asBoolean(row.verified_seller),
   listingCount: asNumber(row.listing_count),
   activeListingCount: asNumber(row.active_listing_count),
   completedSales: asNumber(row.completed_sales),
@@ -1239,6 +1246,7 @@ export function RedlineApp() {
           current.cover = product.storeImageUrl;
         }
         current.rating = product.storeRating;
+        current.verifiedSeller = current.verifiedSeller || product.verifiedSeller;
       } else {
         byId.set(product.storeId, {
           id: product.storeId,
@@ -1247,6 +1255,7 @@ export function RedlineApp() {
           productCount: 1,
           cover: product.storeImageUrl,
           rating: product.storeRating,
+          verifiedSeller: product.verifiedSeller,
         });
       }
     }
@@ -1697,7 +1706,11 @@ export function RedlineApp() {
           <span className="profile-avatar">{initial}</span>
           <span className="profile-card-copy">
             <strong>{displayName}</strong>
-            <span><BadgeCheck size={13} /> Зарегистрирован</span>
+            {sellerFinance?.verifiedSeller ? (
+              <VerifiedSellerMark />
+            ) : (
+              <span className="club-member-label">Участник клуба</span>
+            )}
           </span>
         </button>
         <nav className="drawer-nav">
@@ -2184,6 +2197,7 @@ function Market({
                     ) : store.name.slice(0, 2).toUpperCase()}
                   </span>
                   <b>{store.name}</b>
+                  {store.verifiedSeller && <VerifiedSellerMark compact />}
                   <small>{store.productCount} товаров{store.rating > 0 ? ` · ★ ${store.rating.toFixed(1)}` : ""}</small>
                 </button>
               ))}
@@ -2259,6 +2273,15 @@ function ConnectClubState({ hasGroups }: { hasGroups: boolean }) {
   );
 }
 
+function VerifiedSellerMark({ compact = false }: { compact?: boolean }) {
+  return (
+    <span className={`verified-seller-mark ${compact ? "compact" : ""}`} title="Статус подтверждён администратором клуба">
+      <BadgeCheck size={compact ? 11 : 13} />
+      {compact ? "Проверен" : "Проверенный продавец"}
+    </span>
+  );
+}
+
 function ProductCard({
   product,
   favorite,
@@ -2299,7 +2322,11 @@ function ProductCard({
         <button type="button" className={`heart-button ${favorite ? "active" : ""}`} onClick={(event) => { event.stopPropagation(); onFavorite(); }} aria-label="Избранное"><Heart size={15} fill={favorite ? "currentColor" : "none"} /></button>
       </div>
       <div className="product-body">
-        <span className="seller-line"><BadgeCheck size={12} />{product.storeName}</span>
+        <span className={`seller-line ${product.verifiedSeller ? "verified" : ""}`}>
+          <Store size={12} />
+          <span>{product.storeName}</span>
+          {product.verifiedSeller && <VerifiedSellerMark compact />}
+        </span>
         <button className="product-title" onClick={onOpen}>{product.title}</button>
         <p>{product.description}</p>
         <div className="product-card-tail">
@@ -2429,7 +2456,11 @@ function ProductModal({
           </div>
         )}
         <div className="modal-body">
-          <span className="seller-line"><BadgeCheck size={13} />{product.storeName}</span>
+          <span className={`seller-line ${product.verifiedSeller ? "verified" : ""}`}>
+            <Store size={13} />
+            <span>{product.storeName}</span>
+            {product.verifiedSeller && <VerifiedSellerMark />}
+          </span>
           <span className="availability-chip">● В наличии · {availableStock} шт.</span>
           <h2>{product.title}</h2>
           <div className="rating-line modal-rating">
@@ -3070,6 +3101,7 @@ function SellerProfileModal({
               {profile.phone ? ` · ${profile.phone}` : ""}
             </small>
             <em>{club ? club.title : "Клуб не выбран"}</em>
+            {sellerProfile?.verifiedSeller && <VerifiedSellerMark />}
           </div>
         </div>
 
@@ -5228,8 +5260,8 @@ function ClubAdmin({
         </button>
       </form>
       <div className="subsection-heading">
-        <h2>Комиссии и лимиты продавцов</h2>
-        <p>Настройки действуют отдельно для каждого магазина этого клуба.</p>
+        <h2>Продавцы: проверка, комиссии и лимиты</h2>
+        <p>Назначайте статус «Проверенный продавец» отдельно внутри этого клуба.</p>
       </div>
       <div className="finance-admin-list">
         {sellerFinances.map((seller) => (
@@ -5245,6 +5277,7 @@ function ClubAdmin({
                 `/groups/${club.telegramGroupId}/admin/seller-finances`,
               );
               setSellerFinances(rows);
+              await onChanged();
               onToast(message);
             }}
           />
@@ -5379,6 +5412,7 @@ function SellerFinanceAdminRow({
   const [limit, setLimit] = useState(
     String(Math.round(asNumber(seller.debt_limit_kopecks) / 100)),
   );
+  const [verified, setVerified] = useState(asBoolean(seller.verified_seller));
   const [saving, setSaving] = useState(false);
 
   return (
@@ -5393,6 +5427,7 @@ function SellerFinanceAdminRow({
             body: JSON.stringify({
               commissionPercent: Number(commission),
               debtLimitKopecks: Number(limit) * 100,
+              verifiedSeller: verified,
             }),
           });
           await onSaved("Настройки продавца сохранены");
@@ -5408,6 +5443,11 @@ function SellerFinanceAdminRow({
       <label><span>Комиссия, %</span><input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} required /></label>
       <label><span>Лимит, ₽</span><input type="number" min="1" step="1" value={limit} onChange={(event) => setLimit(event.target.value)} required /></label>
       <div className="seller-finance-debt"><span>Текущий долг</span><b>{formatPrice(debt)}</b></div>
+      <label className={`verified-seller-admin-toggle ${verified ? "active" : ""}`}>
+        <input type="checkbox" checked={verified} onChange={(event) => setVerified(event.target.checked)} />
+        <span><BadgeCheck size={15} /> Проверенный продавец</span>
+        <small>Отметка появится в профиле, магазине и товарах этого клуба.</small>
+      </label>
       <div className="seller-finance-actions">
         <button
           type="button"

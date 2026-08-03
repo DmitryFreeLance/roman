@@ -148,6 +148,14 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
     }
 
     private void ensureFinancialColumns(JdbcTemplate jdbc) {
+        Set<String> sellerFinanceColumns = columns(jdbc, "seller_group_finance");
+        if (!sellerFinanceColumns.contains("verified_seller")) {
+            jdbc.execute("""
+                    ALTER TABLE seller_group_finance
+                    ADD COLUMN verified_seller INTEGER NOT NULL DEFAULT 0
+                      CHECK (verified_seller IN (0, 1))
+                    """);
+        }
         Set<String> platformColumns = columns(jdbc, "platform_settings");
         if (!platformColumns.contains("payment_details")) {
             jdbc.execute("ALTER TABLE platform_settings ADD COLUMN payment_details TEXT NOT NULL DEFAULT ''");

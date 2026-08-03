@@ -524,13 +524,20 @@ class MarketplaceServiceSqliteTest {
         assertThat(marketplace.catalog(-100123L)).isNotEmpty();
 
         marketplace.updateGroupSellerFinance(
-                -100123L, sellerId, sellerId, 3.5, 10_000L
+                -100123L, sellerId, sellerId, 3.5, 10_000L, true
         );
         assertThat(marketplace.catalog(-100123L)).isEmpty();
+        assertThat(jdbc.queryForObject("""
+                SELECT verified_seller FROM seller_group_finance
+                WHERE seller_telegram_id = ?
+                """, Integer.class, sellerId)).isEqualTo(1);
         marketplace.repayGroupSellerDebt(
                 -100123L, sellerId, sellerId, 10_150L
         );
-        assertThat(marketplace.catalog(-100123L)).isNotEmpty();
+        assertThat(marketplace.catalog(-100123L)).isNotEmpty()
+                .allSatisfy(row -> assertThat(row.get("verified_seller")).isEqualTo(1));
+        assertThat(marketplace.sellerFinance(sellerId, -100123L)
+                .get("verified_seller")).isEqualTo(1);
 
         marketplace.setSuperAdmin(firstBuyerId, true);
         assertThat(marketplace.isSuperAdmin(firstBuyerId)).isTrue();

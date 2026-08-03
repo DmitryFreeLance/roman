@@ -103,6 +103,7 @@ public class MarketplaceService {
                        COALESCE(NULLIF(s.display_name, ''),
                          TRIM(s.first_name || ' ' || COALESCE(s.last_name, '')))
                          AS seller_name,
+                       COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        p.active,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(DISTINCT r.id) AS review_count,
@@ -144,6 +145,7 @@ public class MarketplaceService {
                   )
                 GROUP BY p.id, s.bot_commission_percent, g.commission_percent,
                          sgf.commission_percent,
+                         sgf.verified_seller,
                          st.id, st.name, st.image_url, s.username, s.phone,
                          s.display_name,
                          s.first_name, s.last_name,
@@ -166,6 +168,7 @@ public class MarketplaceService {
                        st.id AS store_id, st.name AS store_name,
                        st.image_url AS store_image_url,
                        st.seller_telegram_id,
+                       COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        COALESCE(AVG(r.rating), 0) AS rating,
                        COUNT(DISTINCT r.id) AS review_count,
                        gb.id AS group_buy_id, gb.target_count,
@@ -188,6 +191,7 @@ public class MarketplaceService {
                   AND p.deleted = 0
                 GROUP BY p.id, u.bot_commission_percent, g.commission_percent,
                          sgf.commission_percent,
+                         sgf.verified_seller,
                          st.id, st.name, st.image_url,
                          gb.id, gb.target_count, gb.status
                 ORDER BY p.created_at DESC
@@ -345,6 +349,7 @@ public class MarketplaceService {
                 SELECT st.id AS store_id, st.name AS store_name,
                        st.description AS store_description,
                        st.image_url AS store_image_url,
+                       COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        st.payment_bank, st.payment_phone,
                        st.payment_recipient_name, st.payment_sbp_link,
                        COALESCE(
@@ -380,6 +385,9 @@ public class MarketplaceService {
                         WHERE p.store_id = st.id) AS review_count
                 FROM stores st
                 JOIN telegram_groups g ON g.id = st.group_id
+                LEFT JOIN seller_group_finance sgf
+                  ON sgf.group_id = g.id
+                 AND sgf.seller_telegram_id = st.seller_telegram_id
                 WHERE st.seller_telegram_id = ?
                   AND g.telegram_group_id = ?
                   AND st.active = 1
@@ -522,6 +530,7 @@ public class MarketplaceService {
                        g.payment_phone AS group_payment_phone,
                        g.payment_recipient_name AS group_payment_recipient_name,
                        g.payment_sbp_link AS group_payment_sbp_link,
+                       COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        (u.commission_debt_kopecks >= u.debt_limit_kopecks)
                          AS platform_blocked,
                        (COALESCE(sgf.commission_debt_kopecks, 0)
@@ -1928,6 +1937,7 @@ public class MarketplaceService {
                          AS commission_debt_kopecks,
                        COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks)
                          AS debt_limit_kopecks,
+                       COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        (COALESCE(sgf.commission_debt_kopecks, 0)
                          >= COALESCE(sgf.debt_limit_kopecks, g.debt_limit_kopecks))
                          AS seller_blocked
@@ -1948,26 +1958,50 @@ public class MarketplaceService {
                                          long ownerTelegramId,
                                          long sellerTelegramId,
                                          double commissionPercent,
-                                         long debtLimitKopecks) {
+                                         long debtLimitKopecks,
+                                         boolean verifiedSeller) {
         assertGroupOwner(telegramGroupId, ownerTelegramId);
         Long groupId = jdbc.queryForObject(
                 "SELECT id FROM telegram_groups WHERE telegram_group_id = ?",
                 Long.class, telegramGroupId
         );
         ensureSellerGroupFinance(groupId, sellerTelegramId);
+        Integer previousVerified = jdbc.queryForObject("""
+                SELECT verified_seller FROM seller_group_finance
+                WHERE group_id = ? AND seller_telegram_id = ?
+                """, Integer.class, groupId, sellerTelegramId);
         int updated = jdbc.update("""
                 UPDATE seller_group_finance
                 SET commission_percent = ?, debt_limit_kopecks = ?,
+                    verified_seller = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE group_id = ? AND seller_telegram_id = ?
                   AND EXISTS (
                     SELECT 1 FROM stores st
                     WHERE st.group_id = ? AND st.seller_telegram_id = ?
                   )
-                """, commissionPercent, debtLimitKopecks,
+                """, commissionPercent, debtLimitKopecks, verifiedSeller,
                 groupId, sellerTelegramId, groupId, sellerTelegramId);
         if (updated == 0) throw new IllegalArgumentException("Продавец не найден в клубе");
         notifySellerFinanceState(sellerTelegramId, groupId);
+        boolean statusChanged = (previousVerified != null && previousVerified == 1)
+                != verifiedSeller;
+        if (statusChanged) {
+            String groupTitle = jdbc.queryForObject(
+                    "SELECT title FROM telegram_groups WHERE id = ?",
+                    String.class, groupId
+            );
+            notifyUser(sellerTelegramId, verifiedSeller
+                    ? """
+                      <b>Вы получили статус «Проверенный продавец»</b>
+                      Администратор клуба «%s» подтвердил ваш магазин. Отметка
+                      теперь отображается в профиле, магазине и карточках товаров.
+                      """.formatted(escapeHtml(groupTitle))
+                    : """
+                      <b>Статус «Проверенный продавец» снят</b>
+                      Администратор клуба «%s» отключил отметку магазина.
+                      """.formatted(escapeHtml(groupTitle)));
+        }
     }
 
     @Transactional

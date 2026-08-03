@@ -129,6 +129,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .product-body { padding: 15px; display: flex; flex: 1; flex-direction: column; }
 .seller-line { background: transparent; border: 0; padding: 0; color: #777; font-size: 9px; display: flex; gap: 5px; align-items: center; text-transform: uppercase; letter-spacing: .08em; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seller-line svg { color: var(--red); }
+.seller-line > span:not(.verified-seller-mark) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.verified-seller-mark { width: fit-content; display: inline-flex !important; align-items: center; gap: 4px; padding: 4px 7px; border: 1px solid rgba(227,27,35,.48); border-radius: 999px; background: rgba(227,27,35,.11); color: #ff777c !important; font-size: 7px !important; font-style: normal; font-weight: 800; line-height: 1; letter-spacing: .045em; text-transform: uppercase; white-space: nowrap; }
+.verified-seller-mark svg { flex: 0 0 auto; color: var(--red-2) !important; }
+.verified-seller-mark.compact { margin-left: auto; padding: 3px 5px; font-size: 6px !important; }
+.club-member-label { padding-left: 1px; }
 .product-title { display: -webkit-box; min-height: 38px; background: transparent; border: 0; padding: 0; font-size: 16px; line-height: 1.2; font-weight: 800; margin-top: 7px; text-align: left; cursor: pointer; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .product-body > p { min-height: 30px; color: #747474; font-size: 10px; line-height: 1.5; margin: 5px 0 10px; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .product-card-tail { display: flex; flex-direction: column; margin-top: auto; }
@@ -979,6 +984,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .storefront-card b { margin: 9px 3px 0; font-size: 10px; overflow-wrap: anywhere; }
 .storefront-card small { margin: 3px; color: #6d6d6d; font-size: 7px; }
+.storefront-card .verified-seller-mark { margin: 5px 3px 0 3px; }
 .store-products-heading { margin-top: 0; }
 .listings-create { width: min(300px, 100%); margin: 0 0 18px auto; }
 .seller-listing-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 270px; }
@@ -1135,6 +1141,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .seller-finance-admin-row input { width: 100%; min-height: 40px; border: 1px solid var(--line); background: #171717; color: #eee; padding: 9px; }
 .seller-finance-debt { min-height: 40px; justify-content: center; padding: 7px 10px; border: 1px solid var(--line); }
 .seller-finance-debt b { color: var(--red-2); font-family: var(--font-oswald); font-size: 18px; }
+.seller-finance-admin-row .verified-seller-admin-toggle { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 9px; padding: 10px 12px; border: 1px solid var(--line); background: #171717; cursor: pointer; }
+.seller-finance-admin-row .verified-seller-admin-toggle.active { border-color: rgba(227,27,35,.48); background: rgba(227,27,35,.075); }
+.seller-finance-admin-row .verified-seller-admin-toggle input { grid-row: 1 / 3; width: 18px; min-height: 18px; margin: 0; padding: 0; accent-color: var(--red); }
+.seller-finance-admin-row .verified-seller-admin-toggle span { display: inline-flex; align-items: center; gap: 6px; color: #ddd; font-size: 9px; }
+.seller-finance-admin-row .verified-seller-admin-toggle span svg { color: var(--red-2); }
+.seller-finance-admin-row .verified-seller-admin-toggle small { color: #666; font-size: 7px; line-height: 1.4; }
 .seller-finance-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; }
 .seller-finance-actions button { min-height: 36px; padding: 0 13px; border: 1px solid var(--line); background: #1b1b1b; color: #aaa; font-size: 8px; text-transform: uppercase; cursor: pointer; }
 .seller-finance-actions button.contact-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-color: rgba(84,184,232,.34); color: #83ccec; }

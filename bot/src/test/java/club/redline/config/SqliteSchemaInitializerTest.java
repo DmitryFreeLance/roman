@@ -76,5 +76,9 @@ class SqliteSchemaInitializerTest {
         )).extracting(row -> String.valueOf(row.get("name")))
                 .contains("payment_bank", "payment_phone",
                         "payment_recipient_name", "payment_sbp_link");
+        assertThat(jdbc.queryForList(
+                "PRAGMA table_info(seller_group_finance)"
+        )).extracting(row -> String.valueOf(row.get("name")))
+                .contains("verified_seller");
     }
 }

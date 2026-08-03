@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS seller_group_finance (
   commission_percent REAL NOT NULL DEFAULT 3.5,
   commission_debt_kopecks INTEGER NOT NULL DEFAULT 0,
   debt_limit_kopecks INTEGER NOT NULL DEFAULT 50000,
+  verified_seller INTEGER NOT NULL DEFAULT 0 CHECK (verified_seller IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (group_id, seller_telegram_id)
