@@ -2343,7 +2343,7 @@ function ProductCard({
               </div>
             ) : null}
           </div>
-          <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>В наличии: {product.stock}</span></div>
+          <div className="price-row"><div><strong>{formatPrice(product.buyerPriceKopecks)}</strong></div><span>{product.kind === "group" ? "Под заказ" : "В наличии"}: {product.stock}</span></div>
           <div className="product-card-actions">
             <button
               className={`primary-card-action ${groupClosed ? "locked" : ""} ${product.reservedByMe ? "success" : ""}`}
@@ -2461,7 +2461,7 @@ function ProductModal({
             <span>{product.storeName}</span>
             {product.verifiedSeller && <VerifiedSellerMark />}
           </span>
-          <span className="availability-chip">● В наличии · {availableStock} шт.</span>
+          <span className="availability-chip">● {product.kind === "group" ? "Под заказ" : "В наличии"} · {availableStock} шт.</span>
           <h2>{product.title}</h2>
           <div className="rating-line modal-rating">
             <div>
