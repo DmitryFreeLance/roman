@@ -49,7 +49,7 @@ export default function RootLayout({
     <html lang="ru" suppressHydrationWarning>
       <body className={`${manrope.variable} ${oswald.variable}`}>
         <script
-          src="https://telegram.org/js/telegram-web-app.js?63"
+          src="/redlineclub/telegram-web-app.js"
           data-redline-telegram="true"
           async
         />
