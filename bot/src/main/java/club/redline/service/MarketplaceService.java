@@ -266,6 +266,7 @@ public class MarketplaceService {
         Long storeId = jdbc.queryForObject("""
                 SELECT id FROM stores WHERE seller_telegram_id = ? AND group_id = ?
                 """, Long.class, sellerTelegramId, input.groupId());
+        assertStoreOfferComplete(storeId);
         Long productId = jdbc.queryForObject("""
                 INSERT INTO products
                   (store_id, group_id, title, description, specifications, category, stock,
@@ -296,6 +297,12 @@ public class MarketplaceService {
     @Transactional
     public long createStore(long sellerTelegramId, NewStore input) {
         ensureSellerGroupFinance(input.groupId(), sellerTelegramId);
+        OfferDetails offer = normalizeOfferDetails(
+                input.offerSellerName(), input.offerInn(), input.offerEmail(),
+                input.offerAddress(), input.offerSettlementAccount(),
+                input.offerBankName(), input.offerBik(),
+                input.offerCorrespondentAccount(), input.offerAccepted()
+        );
         PaymentMethod payment = normalizePaymentMethod(
                 input.paymentBank(),
                 input.paymentPhone(),
@@ -306,8 +313,11 @@ public class MarketplaceService {
                 INSERT INTO stores
                   (group_id, seller_telegram_id, name, description,
                    image_url, payment_bank, payment_phone,
-                   payment_recipient_name, payment_sbp_link, payment_details)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   payment_recipient_name, payment_sbp_link, payment_details,
+                   offer_seller_name, offer_inn, offer_email, offer_address,
+                   offer_settlement_account, offer_bank_name, offer_bik,
+                   offer_correspondent_account, offer_accepted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                   name = EXCLUDED.name,
                   description = EXCLUDED.description,
@@ -317,12 +327,23 @@ public class MarketplaceService {
                   payment_recipient_name = EXCLUDED.payment_recipient_name,
                   payment_sbp_link = EXCLUDED.payment_sbp_link,
                   payment_details = EXCLUDED.payment_details,
+                  offer_seller_name = EXCLUDED.offer_seller_name,
+                  offer_inn = EXCLUDED.offer_inn,
+                  offer_email = EXCLUDED.offer_email,
+                  offer_address = EXCLUDED.offer_address,
+                  offer_settlement_account = EXCLUDED.offer_settlement_account,
+                  offer_bank_name = EXCLUDED.offer_bank_name,
+                  offer_bik = EXCLUDED.offer_bik,
+                  offer_correspondent_account = EXCLUDED.offer_correspondent_account,
+                  offer_accepted_at = CURRENT_TIMESTAMP,
                   active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
                 input.description(), input.imageUrl(), payment.bank(),
                 payment.phone(), payment.recipientName(), payment.sbpLink(),
-                payment.details());
+                payment.details(), offer.sellerName(), offer.inn(), offer.email(),
+                offer.address(), offer.settlementAccount(), offer.bankName(),
+                offer.bik(), offer.correspondentAccount());
         return storeId;
     }
 
@@ -331,6 +352,20 @@ public class MarketplaceService {
                 SELECT st.id, st.name, st.description, st.image_url,
                        st.payment_bank, st.payment_phone,
                        st.payment_recipient_name, st.payment_sbp_link,
+                       st.offer_seller_name, st.offer_inn, st.offer_email,
+                       st.offer_address, st.offer_settlement_account,
+                       st.offer_bank_name, st.offer_bik,
+                       st.offer_correspondent_account,
+                       CASE WHEN st.offer_accepted_at IS NOT NULL
+                         AND COALESCE(st.offer_seller_name, '') <> ''
+                         AND COALESCE(st.offer_inn, '') <> ''
+                         AND COALESCE(st.offer_email, '') <> ''
+                         AND COALESCE(st.offer_address, '') <> ''
+                         AND COALESCE(st.offer_settlement_account, '') <> ''
+                         AND COALESCE(st.offer_bank_name, '') <> ''
+                         AND COALESCE(st.offer_bik, '') <> ''
+                         AND COALESCE(st.offer_correspondent_account, '') <> ''
+                       THEN 1 ELSE 0 END AS offer_complete,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -352,6 +387,20 @@ public class MarketplaceService {
                        COALESCE(sgf.verified_seller, 0) AS verified_seller,
                        st.payment_bank, st.payment_phone,
                        st.payment_recipient_name, st.payment_sbp_link,
+                       st.offer_seller_name, st.offer_inn, st.offer_email,
+                       st.offer_address, st.offer_settlement_account,
+                       st.offer_bank_name, st.offer_bik,
+                       st.offer_correspondent_account,
+                       CASE WHEN st.offer_accepted_at IS NOT NULL
+                         AND COALESCE(st.offer_seller_name, '') <> ''
+                         AND COALESCE(st.offer_inn, '') <> ''
+                         AND COALESCE(st.offer_email, '') <> ''
+                         AND COALESCE(st.offer_address, '') <> ''
+                         AND COALESCE(st.offer_settlement_account, '') <> ''
+                         AND COALESCE(st.offer_bank_name, '') <> ''
+                         AND COALESCE(st.offer_bik, '') <> ''
+                         AND COALESCE(st.offer_correspondent_account, '') <> ''
+                       THEN 1 ELSE 0 END AS offer_complete,
                        COALESCE(
                          NULLIF(st.payment_details, ''),
                          NULLIF(st.payment_card, ''),
@@ -405,11 +454,22 @@ public class MarketplaceService {
                                    String name, String imageUrl,
                                    String paymentBank, String paymentPhone,
                                    String paymentRecipientName,
-                                   String paymentSbpLink) {
+                                   String paymentSbpLink,
+                                   String offerSellerName, String offerInn,
+                                   String offerEmail, String offerAddress,
+                                   String offerSettlementAccount,
+                                   String offerBankName, String offerBik,
+                                   String offerCorrespondentAccount,
+                                   boolean offerAccepted) {
         String normalizedName = name == null ? "" : name.strip();
         String normalizedImageUrl = imageUrl == null ? "" : imageUrl.strip();
         PaymentMethod payment = normalizePaymentMethod(
                 paymentBank, paymentPhone, paymentRecipientName, paymentSbpLink
+        );
+        OfferDetails offer = normalizeOfferDetails(
+                offerSellerName, offerInn, offerEmail, offerAddress,
+                offerSettlementAccount, offerBankName, offerBik,
+                offerCorrespondentAccount, offerAccepted
         );
         if (normalizedName.isEmpty() || normalizedName.length() > 100) {
             throw new IllegalArgumentException(
@@ -424,14 +484,110 @@ public class MarketplaceService {
                 SET name = ?, image_url = ?,
                     payment_bank = ?, payment_phone = ?,
                     payment_recipient_name = ?, payment_sbp_link = ?,
-                    payment_details = ?
+                    payment_details = ?, offer_seller_name = ?, offer_inn = ?,
+                    offer_email = ?, offer_address = ?,
+                    offer_settlement_account = ?, offer_bank_name = ?,
+                    offer_bik = ?, offer_correspondent_account = ?,
+                    offer_accepted_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND seller_telegram_id = ? AND active = 1
                 """, normalizedName, normalizedImageUrl, payment.bank(),
                 payment.phone(), payment.recipientName(), payment.sbpLink(),
-                payment.details(), storeId, sellerTelegramId);
+                payment.details(), offer.sellerName(), offer.inn(), offer.email(),
+                offer.address(), offer.settlementAccount(), offer.bankName(),
+                offer.bik(), offer.correspondentAccount(), storeId,
+                sellerTelegramId);
         if (updated == 0) {
             throw new IllegalArgumentException("Магазин не найден");
         }
+    }
+
+    public Map<String, Object> storeOfferDetails(long storeId) {
+        Map<String, Object> details = jdbc.queryForMap("""
+                SELECT st.id, st.seller_telegram_id, st.name AS store_name,
+                       st.offer_seller_name,
+                       st.offer_inn, st.offer_email, st.offer_address,
+                       st.offer_settlement_account, st.offer_bank_name,
+                       st.offer_bik, st.offer_correspondent_account,
+                       st.offer_accepted_at, u.username, u.phone
+                FROM stores st
+                JOIN users u ON u.telegram_id = st.seller_telegram_id
+                WHERE st.id = ? AND st.active = 1
+                """, storeId);
+        assertOfferDetailsComplete(details);
+        return details;
+    }
+
+    private void assertStoreOfferComplete(long storeId) {
+        Map<String, Object> details = jdbc.queryForMap("""
+                SELECT offer_seller_name, offer_inn, offer_email, offer_address,
+                       offer_settlement_account, offer_bank_name, offer_bik,
+                       offer_correspondent_account, offer_accepted_at
+                FROM stores WHERE id = ? AND active = 1
+                """, storeId);
+        assertOfferDetailsComplete(details);
+    }
+
+    private void assertOfferDetailsComplete(Map<String, Object> details) {
+        for (String field : List.of(
+                "offer_seller_name", "offer_inn", "offer_email", "offer_address",
+                "offer_settlement_account", "offer_bank_name", "offer_bik",
+                "offer_correspondent_account", "offer_accepted_at")) {
+            Object value = details.get(field);
+            if (value == null || String.valueOf(value).isBlank()) {
+                throw new IllegalArgumentException(
+                        "Заполните реквизиты публичной оферты в профиле магазина"
+                );
+            }
+        }
+    }
+
+    private OfferDetails normalizeOfferDetails(
+            String sellerName, String inn, String email, String address,
+            String settlementAccount, String bankName, String bik,
+            String correspondentAccount, boolean accepted) {
+        if (!accepted) {
+            throw new IllegalArgumentException("Подтвердите согласие с публичной офертой");
+        }
+        String normalizedName = requiredText(sellerName, "Укажите продавца", 200);
+        String normalizedInn = digits(inn);
+        if (!(normalizedInn.length() == 10 || normalizedInn.length() == 12)) {
+            throw new IllegalArgumentException("ИНН должен содержать 10 или 12 цифр");
+        }
+        String normalizedEmail = requiredText(email, "Укажите email продавца", 254);
+        if (!normalizedEmail.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+            throw new IllegalArgumentException("Укажите корректный email продавца");
+        }
+        String normalizedSettlement = digits(settlementAccount);
+        if (normalizedSettlement.length() != 20) {
+            throw new IllegalArgumentException("Расчётный счёт должен содержать 20 цифр");
+        }
+        String normalizedBik = digits(bik);
+        if (normalizedBik.length() != 9) {
+            throw new IllegalArgumentException("БИК должен содержать 9 цифр");
+        }
+        String normalizedCorrespondent = digits(correspondentAccount);
+        if (normalizedCorrespondent.length() != 20) {
+            throw new IllegalArgumentException("Корреспондентский счёт должен содержать 20 цифр");
+        }
+        return new OfferDetails(
+                normalizedName, normalizedInn, normalizedEmail,
+                requiredText(address, "Укажите адрес продавца", 500),
+                normalizedSettlement,
+                requiredText(bankName, "Укажите наименование банка", 200),
+                normalizedBik, normalizedCorrespondent
+        );
+    }
+
+    private String requiredText(String value, String message, int maxLength) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.isEmpty() || normalized.length() > maxLength) {
+            throw new IllegalArgumentException(message);
+        }
+        return normalized;
+    }
+
+    private String digits(String value) {
+        return value == null ? "" : value.replaceAll("\\D", "");
     }
 
     private PaymentMethod normalizePaymentMethod(String bank, String phone,
@@ -547,12 +703,19 @@ public class MarketplaceService {
     }
 
     @Transactional
-    public void registerProfile(long telegramId, String displayName, String phone, Long groupId) {
+    public void registerProfile(long telegramId, String displayName, String phone,
+                                Long groupId, boolean privacyAccepted) {
+        if (!privacyAccepted) {
+            throw new IllegalArgumentException(
+                    "Подтвердите согласие с политикой конфиденциальности"
+            );
+        }
         validateActiveGroup(groupId);
         String normalizedPhone = normalizeRussianPhone(phone);
         int updated = jdbc.update("""
                 UPDATE users
                 SET display_name = ?, phone = ?, selected_group_id = ?, registered = 1,
+                    privacy_accepted_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ?
                 """, displayName.strip(), normalizedPhone, groupId, telegramId);
@@ -560,7 +723,7 @@ public class MarketplaceService {
     }
 
     public void registerProfile(long telegramId, String displayName, String phone) {
-        registerProfile(telegramId, displayName, phone, null);
+        registerProfile(telegramId, displayName, phone, null, true);
     }
 
     @Transactional
@@ -3216,7 +3379,11 @@ public class MarketplaceService {
     public record NewStore(long groupId, String name, String description,
                            String imageUrl, String paymentBank,
                            String paymentPhone, String paymentRecipientName,
-                           String paymentSbpLink) {}
+                           String paymentSbpLink, String offerSellerName,
+                           String offerInn, String offerEmail, String offerAddress,
+                           String offerSettlementAccount, String offerBankName,
+                           String offerBik, String offerCorrespondentAccount,
+                           boolean offerAccepted) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
     public record OrderItem(long productId, int quantity, String selectedColorKey) {}
     public record ClubTopic(long telegramGroupId, int threadId) {}
@@ -3224,6 +3391,10 @@ public class MarketplaceService {
     private record PaymentMethod(String bank, String phone,
                                  String recipientName, String details,
                                  String sbpLink) {}
+    private record OfferDetails(String sellerName, String inn, String email,
+                                String address, String settlementAccount,
+                                String bankName, String bik,
+                                String correspondentAccount) {}
     private record ProductColor(String key, String name, int stock) {}
     private record NormalizedColorVariants(String json, int totalStock) {}
 }

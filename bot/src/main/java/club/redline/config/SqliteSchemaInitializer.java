@@ -63,6 +63,9 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("registered")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN registered INTEGER NOT NULL DEFAULT 0");
         }
+        if (!columns.contains("privacy_accepted_at")) {
+            jdbc.execute("ALTER TABLE users ADD COLUMN privacy_accepted_at TEXT");
+        }
         if (!columns.contains("selected_group_id")) {
             jdbc.execute("ALTER TABLE users ADD COLUMN selected_group_id INTEGER");
         }
@@ -88,6 +91,15 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         if (!columns.contains("payment_sbp_link")) {
             jdbc.execute("ALTER TABLE stores ADD COLUMN payment_sbp_link TEXT");
         }
+        addTextColumn(jdbc, columns, "stores", "offer_seller_name");
+        addTextColumn(jdbc, columns, "stores", "offer_inn");
+        addTextColumn(jdbc, columns, "stores", "offer_email");
+        addTextColumn(jdbc, columns, "stores", "offer_address");
+        addTextColumn(jdbc, columns, "stores", "offer_settlement_account");
+        addTextColumn(jdbc, columns, "stores", "offer_bank_name");
+        addTextColumn(jdbc, columns, "stores", "offer_bik");
+        addTextColumn(jdbc, columns, "stores", "offer_correspondent_account");
+        addTextColumn(jdbc, columns, "stores", "offer_accepted_at");
         jdbc.update("""
                 UPDATE stores
                 SET payment_details = COALESCE(
@@ -97,6 +109,13 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
                 )
                 WHERE payment_details IS NULL OR payment_details = ''
                 """);
+    }
+
+    private void addTextColumn(JdbcTemplate jdbc, Set<String> columns,
+                               String table, String column) {
+        if (!columns.contains(column)) {
+            jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " TEXT");
+        }
     }
 
     private void ensureProductColumns(JdbcTemplate jdbc) {

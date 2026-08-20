@@ -430,6 +430,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .checkbox-label { flex-direction: row !important; align-items: center; }
 .checkbox-label input { width: 16px; accent-color: var(--red); }
 .checkbox-label span { text-transform: none !important; letter-spacing: 0 !important; }
+.inline-document-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--red-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; font: inherit; }
+.legal-consent { align-items: flex-start !important; gap: 10px; padding: 13px; border: 1px solid rgba(227,27,35,.25); background: rgba(227,27,35,.04); }
+.legal-consent input { flex: 0 0 auto; margin-top: 2px; }
+.legal-form-heading { margin-top: 8px; padding-top: 16px; border-top: 1px solid rgba(227,27,35,.28); }
+.legal-warning { color: #ff7f85 !important; }
 .color-mode-checkbox { padding: 14px; border: 1px solid var(--line); background: #151515; align-items: flex-start; }
 .color-mode-checkbox input { margin-top: 2px; flex: 0 0 auto; }
 .color-mode-checkbox > span { display: flex; flex-direction: column; gap: 4px; }
@@ -1288,6 +1293,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .seller-profile-form > label:not(.profile-store-image) textarea { width: 100%; padding: 13px; border: 1px solid var(--line); background: #151515; color: #eee; font-size: 10px; }
 .seller-profile-form > label:not(.profile-store-image) textarea { resize: vertical; min-height: 82px; }
 .seller-profile-form > label:not(.profile-store-image) small { color: #666; font-size: 8px; line-height: 1.5; }
+.legal-profile-section { display: flex; flex-direction: column; gap: 6px; margin-top: 5px; padding: 14px; border-left: 2px solid var(--red); background: rgba(227,27,35,.055); }
+.legal-profile-section.complete { border-left-color: var(--green); background: rgba(87,199,139,.055); }
+.legal-profile-section > b { font-size: 11px; text-transform: uppercase; }
+.legal-profile-section > small { color: #777; font-size: 8px; line-height: 1.5; }
+.seller-profile-form .legal-consent { flex-direction: row !important; }
+.document-download-action { width: 100%; justify-content: center; }
 .profile-store-image { min-height: 210px; position: relative; display: block; overflow: hidden; border: 1px solid var(--line); background: #151515; cursor: pointer; }
 .profile-store-image > img { display: block; width: 100%; height: 230px; object-fit: cover; object-position: center; }
 .profile-store-image > div { min-height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #777; font-size: 9px; }

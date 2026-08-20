@@ -96,7 +96,11 @@ class MarketplaceServiceSqliteTest {
                 groupId, "Garage", "Test store",
                 "https://example.test/store.jpg",
                 "SBER", "+7 000 000-00-00", "Иван Иванович И.",
-                "https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO038L6NT5RU1M"
+                "https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO038L6NT5RU1M",
+                "ИП Иванов Иван Иванович", "770000000000",
+                "seller@example.test", "г. Москва, ул. Тестовая, д. 1",
+                "40802810000000000001", "Тестовый банк", "044525000",
+                "30101810000000000001", true
         ));
         long productId = marketplace.createProduct(sellerId, new MarketplaceService.NewProduct(
                 groupId, "Brake kit", "Track brake kit", "Комплект на одну ось", "Brakes",
@@ -131,7 +135,11 @@ class MarketplaceServiceSqliteTest {
                 sellerId, storeId, "Garage Pro",
                 "https://example.test/store-profile.jpg",
                 "TBANK", "+7 999 000-00-00", "Пётр Петрович П.",
-                "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M"
+                "https://qr.nspk.ru/AS20003P3RH0LJ2A9ROO038L6NT5RU1M",
+                "ИП Петров Пётр Петрович", "770000000001",
+                "petrov@example.test", "г. Москва, ул. Новая, д. 2",
+                "40802810000000000002", "Т-Банк", "044525974",
+                "30101810145250000974", true
         );
         assertThat(marketplace.myStore(sellerId, -100123L).get("image_url"))
                 .isEqualTo("https://example.test/store-profile.jpg");

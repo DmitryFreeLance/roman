@@ -4,6 +4,7 @@ import club.redline.security.TelegramInitDataVerifier;
 import club.redline.security.TelegramInitDataVerifier.TelegramUser;
 import club.redline.service.MarketplaceService;
 import club.redline.service.ImageStorageService;
+import club.redline.service.LegalDocumentService;
 import club.redline.service.MarketplaceService.NewProduct;
 import club.redline.service.MarketplaceService.NewStore;
 import club.redline.service.MarketplaceService.ReservationResult;
@@ -17,6 +18,9 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,12 +34,15 @@ public class MarketplaceController {
     private final MarketplaceService marketplace;
     private final TelegramInitDataVerifier verifier;
     private final ImageStorageService images;
+    private final LegalDocumentService legalDocuments;
 
     public MarketplaceController(MarketplaceService marketplace, TelegramInitDataVerifier verifier,
-                                 ImageStorageService images) {
+                                 ImageStorageService images,
+                                 LegalDocumentService legalDocuments) {
         this.marketplace = marketplace;
         this.verifier = verifier;
         this.images = images;
+        this.legalDocuments = legalDocuments;
     }
 
     @GetMapping("/me")
@@ -64,8 +71,25 @@ public class MarketplaceController {
                          @Valid @RequestBody RegistrationRequest request) {
         TelegramUser user = authenticated(initData);
         marketplace.registerProfile(
-                user.id(), request.displayName(), request.phone(), request.groupId()
+                user.id(), request.displayName(), request.phone(), request.groupId(),
+                request.privacyAccepted()
         );
+    }
+
+    @GetMapping("/legal/privacy-policy")
+    public ResponseEntity<byte[]> privacyPolicy(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        authenticated(initData);
+        return document(legalDocuments.privacyPolicy(),
+                "Политика_конфиденциальности.docx");
+    }
+
+    @GetMapping("/legal/public-offer-template")
+    public ResponseEntity<byte[]> publicOfferTemplate(
+            @RequestHeader("X-Telegram-Init-Data") String initData) {
+        registered(initData);
+        return document(legalDocuments.publicOfferTemplate(),
+                "Публичная_оферта_шаблон.docx");
     }
 
     @PutMapping("/me/group/{groupId}")
@@ -205,7 +229,11 @@ public class MarketplaceController {
                 request.groupId(), request.name(), request.description(),
                 request.imageUrl(), request.paymentBank(),
                 request.paymentPhone(), request.paymentRecipientName(),
-                request.paymentSbpLink()
+                request.paymentSbpLink(), request.offerSellerName(),
+                request.offerInn(), request.offerEmail(), request.offerAddress(),
+                request.offerSettlementAccount(), request.offerBankName(),
+                request.offerBik(), request.offerCorrespondentAccount(),
+                request.offerAccepted()
         ));
         return Map.of("id", id);
     }
@@ -231,8 +259,22 @@ public class MarketplaceController {
                 registered(initData).id(), storeId,
                 request.name(), request.imageUrl(), request.paymentBank(),
                 request.paymentPhone(), request.paymentRecipientName(),
-                request.paymentSbpLink()
+                request.paymentSbpLink(), request.offerSellerName(),
+                request.offerInn(), request.offerEmail(), request.offerAddress(),
+                request.offerSettlementAccount(), request.offerBankName(),
+                request.offerBik(), request.offerCorrespondentAccount(),
+                request.offerAccepted()
         );
+    }
+
+    @GetMapping("/stores/{storeId}/offer")
+    public ResponseEntity<byte[]> storeOffer(
+            @RequestHeader("X-Telegram-Init-Data") String initData,
+            @PathVariable long storeId) {
+        registered(initData);
+        Map<String, Object> details = marketplace.storeOfferDetails(storeId);
+        return document(legalDocuments.personalizedOffer(details),
+                "Публичная_оферта_магазина.docx");
     }
 
     @PostMapping("/group-buys/{id}/reservations")
@@ -699,9 +741,22 @@ public class MarketplaceController {
         return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
+    private ResponseEntity<byte[]> document(byte[] content, String filename) {
+        String encoded = java.net.URLEncoder.encode(
+                filename, java.nio.charset.StandardCharsets.UTF_8
+        ).replace("+", "%20");
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename*=UTF-8''" + encoded)
+                .body(content);
+    }
+
     public record RegistrationRequest(@NotBlank String displayName,
                                       @NotBlank String phone,
-                                      @Positive Long groupId) {}
+                                      @Positive Long groupId,
+                                      boolean privacyAccepted) {}
     public record CreateProductRequest(
             long groupId,
             @NotBlank String title,
@@ -725,7 +780,16 @@ public class MarketplaceController {
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
-            @Size(max = 500) String paymentSbpLink
+            @Size(max = 500) String paymentSbpLink,
+            @NotBlank @Size(max = 200) String offerSellerName,
+            @NotBlank @Pattern(regexp = "\\d{10}|\\d{12}") String offerInn,
+            @NotBlank @Size(max = 254) String offerEmail,
+            @NotBlank @Size(max = 500) String offerAddress,
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerSettlementAccount,
+            @NotBlank @Size(max = 200) String offerBankName,
+            @NotBlank @Pattern(regexp = "\\d{9}") String offerBik,
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount,
+            boolean offerAccepted
     ) {}
     public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record StoreProfileRequest(
@@ -735,7 +799,16 @@ public class MarketplaceController {
             String paymentBank,
             @NotBlank @Size(max = 30) String paymentPhone,
             @NotBlank @Size(min = 3, max = 100) String paymentRecipientName,
-            @Size(max = 500) String paymentSbpLink
+            @Size(max = 500) String paymentSbpLink,
+            @NotBlank @Size(max = 200) String offerSellerName,
+            @NotBlank @Pattern(regexp = "\\d{10}|\\d{12}") String offerInn,
+            @NotBlank @Size(max = 254) String offerEmail,
+            @NotBlank @Size(max = 500) String offerAddress,
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerSettlementAccount,
+            @NotBlank @Size(max = 200) String offerBankName,
+            @NotBlank @Pattern(regexp = "\\d{9}") String offerBik,
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount,
+            boolean offerAccepted
     ) {}
     public record UpdateProductRequest(
             @NotBlank String title,

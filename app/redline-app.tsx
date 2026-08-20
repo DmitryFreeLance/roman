@@ -211,6 +211,7 @@ type SellerStore = {
   paymentPhone?: string;
   paymentRecipientName?: string;
   paymentSbpLink?: string;
+  offerComplete: boolean;
 };
 
 type SellerProfileData = {
@@ -224,6 +225,15 @@ type SellerProfileData = {
   paymentPhone?: string;
   paymentRecipientName?: string;
   paymentSbpLink?: string;
+  offerComplete: boolean;
+  offerSellerName?: string;
+  offerInn?: string;
+  offerEmail?: string;
+  offerAddress?: string;
+  offerSettlementAccount?: string;
+  offerBankName?: string;
+  offerBik?: string;
+  offerCorrespondentAccount?: string;
   verifiedSeller: boolean;
   listingCount: number;
   activeListingCount: number;
@@ -745,6 +755,7 @@ const camelStore = (row: Record<string, unknown>): SellerStore => ({
   paymentSbpLink: row.payment_sbp_link
     ? String(row.payment_sbp_link)
     : undefined,
+  offerComplete: asBoolean(row.offer_complete),
 });
 
 const camelSellerProfile = (
@@ -769,6 +780,19 @@ const camelSellerProfile = (
     : undefined,
   paymentSbpLink: row.payment_sbp_link
     ? String(row.payment_sbp_link)
+    : undefined,
+  offerComplete: asBoolean(row.offer_complete),
+  offerSellerName: row.offer_seller_name ? String(row.offer_seller_name) : undefined,
+  offerInn: row.offer_inn ? String(row.offer_inn) : undefined,
+  offerEmail: row.offer_email ? String(row.offer_email) : undefined,
+  offerAddress: row.offer_address ? String(row.offer_address) : undefined,
+  offerSettlementAccount: row.offer_settlement_account
+    ? String(row.offer_settlement_account)
+    : undefined,
+  offerBankName: row.offer_bank_name ? String(row.offer_bank_name) : undefined,
+  offerBik: row.offer_bik ? String(row.offer_bik) : undefined,
+  offerCorrespondentAccount: row.offer_correspondent_account
+    ? String(row.offer_correspondent_account)
     : undefined,
   verifiedSeller: asBoolean(row.verified_seller),
   listingCount: asNumber(row.listing_count),
@@ -1071,6 +1095,30 @@ export function RedlineApp() {
       window.clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortFromCaller);
     }
+  }
+
+  async function downloadDocument(path: string, filename: string) {
+    const response = await fetch(`${API}${path}`, {
+      headers: { "X-Telegram-Init-Data": initData },
+    });
+    if (!response.ok) {
+      let message = `Ошибка ${response.status}`;
+      try {
+        const body = await response.json();
+        message = body.message || body.error || message;
+      } catch {
+        // Keep the HTTP status when the server did not return JSON.
+      }
+      throw new Error(message);
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   async function loadBootstrap(data = initData) {
@@ -1542,10 +1590,21 @@ export function RedlineApp() {
       <Registration
         profile={profile}
         clubs={clubs}
-        onRegister={async (name, phone, groupId) => {
+        onDownloadPolicy={() =>
+          downloadDocument(
+            "/legal/privacy-policy",
+            "Политика_конфиденциальности.docx",
+          )
+        }
+        onRegister={async (name, phone, groupId, privacyAccepted) => {
           await request("/register", {
             method: "POST",
-            body: JSON.stringify({ displayName: name, phone, groupId }),
+            body: JSON.stringify({
+              displayName: name,
+              phone,
+              groupId,
+              privacyAccepted,
+            }),
           });
           await loadBootstrap();
         }}
@@ -1817,6 +1876,12 @@ export function RedlineApp() {
             club={selectedClub}
             categories={categories}
             request={request}
+            onDownloadOfferTemplate={() =>
+              downloadDocument(
+                "/legal/public-offer-template",
+                "Публичная_оферта_шаблон.docx",
+              )
+            }
             onCreate={() => navigate("create")}
             onChanged={async () => {
               await Promise.all([
@@ -1910,6 +1975,18 @@ export function RedlineApp() {
           profile={profile}
           club={selectedClub}
           request={request}
+          onDownloadOfferTemplate={() =>
+            downloadDocument(
+              "/legal/public-offer-template",
+              "Публичная_оферта_шаблон.docx",
+            )
+          }
+          onDownloadOffer={(storeId) =>
+            downloadDocument(
+              `/stores/${storeId}/offer`,
+              "Публичная_оферта_магазина.docx",
+            )
+          }
           onClose={() => setProfileOpen(false)}
           onChanged={async () => {
             if (selectedClub) {
@@ -1937,6 +2014,14 @@ export function RedlineApp() {
           onAddToCart={(quantity, selectedColorKey) =>
             addToCart(selectedProduct, quantity, selectedColorKey)
           }
+          onDownloadOffer={() =>
+            downloadDocument(
+              `/stores/${selectedProduct.storeId}/offer`,
+              `Публичная_оферта_${selectedProduct.storeName}.docx`,
+            ).catch((downloadError) =>
+              setToast(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
+            )
+          }
         />
       )}
 
@@ -1958,16 +2043,24 @@ function Registration({
   profile,
   clubs,
   onRegister,
+  onDownloadPolicy,
 }: {
   profile: Profile;
   clubs: Club[];
-  onRegister: (name: string, phone: string, groupId: number | null) => Promise<void>;
+  onRegister: (
+    name: string,
+    phone: string,
+    groupId: number | null,
+    privacyAccepted: boolean,
+  ) => Promise<void>;
+  onDownloadPolicy: () => Promise<void>;
 }) {
   const suggestedName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const [name, setName] = useState(suggestedName);
   const [phone, setPhone] = useState("");
   const [groupId, setGroupId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [error, setError] = useState("");
 
   return (
@@ -1983,7 +2076,12 @@ function Registration({
             setSaving(true);
             setError("");
             try {
-              await onRegister(name, phone, groupId ? Number(groupId) : null);
+              await onRegister(
+                name,
+                phone,
+                groupId ? Number(groupId) : null,
+                privacyAccepted,
+              );
             } catch (registrationError) {
               setError(
                 registrationError instanceof Error
@@ -2037,7 +2135,26 @@ function Registration({
               </select>
             </label>
           )}
-          <label className="checkbox-label"><input type="checkbox" required /><span>Согласен с правилами прямых расчётов между участниками</span></label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={privacyAccepted}
+              onChange={(event) => setPrivacyAccepted(event.target.checked)}
+              required
+            />
+            <span>
+              Согласен с условиями{" "}
+              <button
+                className="inline-document-link"
+                type="button"
+                onClick={() => void onDownloadPolicy().catch((downloadError) =>
+                  setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать документ"),
+                )}
+              >
+                политики конфиденциальности
+              </button>
+            </span>
+          </label>
           {error && <p className="form-error">{error}</p>}
           <button className="main-action" type="submit" disabled={saving}>{saving ? "Сохраняем…" : "Зарегистрироваться"}</button>
         </form>
@@ -2378,6 +2495,7 @@ function ProductModal({
   onDiscuss,
   onReserve,
   onAddToCart,
+  onDownloadOffer,
 }: {
   product: Product;
   favorite: boolean;
@@ -2386,6 +2504,7 @@ function ProductModal({
   onDiscuss: () => void;
   onReserve: (selectedColorKey?: string) => void;
   onAddToCart: (quantity: number, selectedColorKey?: string) => void;
+  onDownloadOffer: () => void;
 }) {
   const [activeImage, setActiveImage] = useState(0);
   const [activeColorKey, setActiveColorKey] = useState(
@@ -2529,6 +2648,13 @@ function ProductModal({
               </div>
             </div>
           )}
+          <button
+            className="outline-action product-offer-action"
+            type="button"
+            onClick={onDownloadOffer}
+          >
+            <ExternalLink size={15} /> Скачать публичную оферту продавца
+          </button>
           <button
             className="main-action product-buy-action"
             disabled={
@@ -2937,12 +3063,16 @@ function SellerProfileModal({
   profile,
   club,
   request,
+  onDownloadOfferTemplate,
+  onDownloadOffer,
   onClose,
   onChanged,
 }: {
   profile: Profile;
   club: Club | null;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onDownloadOfferTemplate: () => Promise<void>;
+  onDownloadOffer: (storeId: number) => Promise<void>;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
@@ -2953,6 +3083,15 @@ function SellerProfileModal({
   const [paymentPhone, setPaymentPhone] = useState("");
   const [paymentRecipientName, setPaymentRecipientName] = useState("");
   const [paymentSbpLink, setPaymentSbpLink] = useState("");
+  const [offerSellerName, setOfferSellerName] = useState("");
+  const [offerInn, setOfferInn] = useState("");
+  const [offerEmail, setOfferEmail] = useState("");
+  const [offerAddress, setOfferAddress] = useState("");
+  const [offerSettlementAccount, setOfferSettlementAccount] = useState("");
+  const [offerBankName, setOfferBankName] = useState("");
+  const [offerBik, setOfferBik] = useState("");
+  const [offerCorrespondentAccount, setOfferCorrespondentAccount] = useState("");
+  const [offerAccepted, setOfferAccepted] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [loading, setLoading] = useState(!!club);
@@ -2977,6 +3116,15 @@ function SellerProfileModal({
       setPaymentPhone(next.paymentPhone || "");
       setPaymentRecipientName(next.paymentRecipientName || "");
       setPaymentSbpLink(next.paymentSbpLink || "");
+      setOfferSellerName(next.offerSellerName || "");
+      setOfferInn(next.offerInn || "");
+      setOfferEmail(next.offerEmail || "");
+      setOfferAddress(next.offerAddress || "");
+      setOfferSettlementAccount(next.offerSettlementAccount || "");
+      setOfferBankName(next.offerBankName || "");
+      setOfferBik(next.offerBik || "");
+      setOfferCorrespondentAccount(next.offerCorrespondentAccount || "");
+      setOfferAccepted(next.offerComplete);
       setError("");
     } catch (loadError) {
       setError(
@@ -3004,6 +3152,15 @@ function SellerProfileModal({
         setPaymentPhone(next.paymentPhone || "");
         setPaymentRecipientName(next.paymentRecipientName || "");
         setPaymentSbpLink(next.paymentSbpLink || "");
+        setOfferSellerName(next.offerSellerName || "");
+        setOfferInn(next.offerInn || "");
+        setOfferEmail(next.offerEmail || "");
+        setOfferAddress(next.offerAddress || "");
+        setOfferSettlementAccount(next.offerSettlementAccount || "");
+        setOfferBankName(next.offerBankName || "");
+        setOfferBik(next.offerBik || "");
+        setOfferCorrespondentAccount(next.offerCorrespondentAccount || "");
+        setOfferAccepted(next.offerComplete);
         setError("");
       })
       .catch((loadError) => {
@@ -3057,6 +3214,15 @@ function SellerProfileModal({
           paymentPhone,
           paymentRecipientName,
           paymentSbpLink,
+          offerSellerName,
+          offerInn,
+          offerEmail,
+          offerAddress,
+          offerSettlementAccount,
+          offerBankName,
+          offerBik,
+          offerCorrespondentAccount,
+          offerAccepted,
         }),
       });
       setFile(null);
@@ -3217,6 +3383,45 @@ function SellerProfileModal({
                   платёжного сервиса, начинающуюся с https://.
                 </small>
               </label>
+              <div className={`legal-profile-section ${sellerProfile.offerComplete ? "complete" : "required"}`}>
+                <span className="section-kicker">ПУБЛИЧНАЯ ОФЕРТА</span>
+                <b>{sellerProfile.offerComplete ? "Реквизиты заполнены" : "Требуется заполнить реквизиты"}</b>
+                <small>Эти данные подставляются в раздел 10 персональной оферты магазина.</small>
+              </div>
+              <label><span>Продавец: ФИО / название ИП</span><input value={offerSellerName} onChange={(event) => setOfferSellerName(event.target.value)} maxLength={200} required /></label>
+              <label><span>ИНН</span><input value={offerInn} onChange={(event) => setOfferInn(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{10}|[0-9]{12}" maxLength={12} required /></label>
+              <label><span>Email продавца</span><input value={offerEmail} onChange={(event) => setOfferEmail(event.target.value)} type="email" maxLength={254} required /></label>
+              <label><span>Адрес продавца</span><textarea value={offerAddress} onChange={(event) => setOfferAddress(event.target.value)} rows={3} maxLength={500} required /></label>
+              <label><span>Расчётный счёт</span><input value={offerSettlementAccount} onChange={(event) => setOfferSettlementAccount(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
+              <label><span>Наименование банка</span><input value={offerBankName} onChange={(event) => setOfferBankName(event.target.value)} maxLength={200} required /></label>
+              <label><span>БИК</span><input value={offerBik} onChange={(event) => setOfferBik(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{9}" maxLength={9} required /></label>
+              <label><span>Корреспондентский счёт</span><input value={offerCorrespondentAccount} onChange={(event) => setOfferCorrespondentAccount(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
+              <label className="checkbox-label legal-consent">
+                <input type="checkbox" checked={offerAccepted} onChange={(event) => setOfferAccepted(event.target.checked)} required />
+                <span>
+                  Согласен с условиями{" "}
+                  <button
+                    className="inline-document-link"
+                    type="button"
+                    onClick={() => void onDownloadOfferTemplate().catch((downloadError) =>
+                      setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
+                    )}
+                  >
+                    публичной оферты
+                  </button>
+                </span>
+              </label>
+              {sellerProfile.offerComplete && sellerProfile.storeId && (
+                <button
+                  className="outline-action document-download-action"
+                  type="button"
+                  onClick={() => void onDownloadOffer(sellerProfile.storeId as number).catch((downloadError) =>
+                    setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
+                  )}
+                >
+                  <ExternalLink size={15} /> Скачать персональную оферту
+                </button>
+              )}
               {error && <p className="form-error">{error}</p>}
               <button
                 className="main-action"
@@ -3224,7 +3429,8 @@ function SellerProfileModal({
                   saving ||
                   !storeName.trim() ||
                   !paymentPhone.trim() ||
-                  !paymentRecipientName.trim()
+                  !paymentRecipientName.trim() ||
+                  !offerAccepted
                 }
               >
                 {saving ? "Сохраняем…" : "Сохранить профиль магазина"}
@@ -4531,6 +4737,7 @@ function CreateListing({
   club,
   categories,
   request,
+  onDownloadOfferTemplate,
   onCreated,
 }: {
   profile: Profile;
@@ -4538,6 +4745,7 @@ function CreateListing({
   club: Club | null;
   categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onDownloadOfferTemplate: () => Promise<void>;
   onCreated: () => Promise<void>;
 }) {
   const [kind, setKind] = useState<"regular" | "group">("regular");
@@ -4610,6 +4818,10 @@ function CreateListing({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (store && !store.offerComplete) {
+      setError("Заполните реквизиты публичной оферты в профиле магазина.");
+      return;
+    }
     if (!multipleColors && !files.length) {
       setError("Добавьте хотя бы одну фотографию.");
       return;
@@ -4700,6 +4912,15 @@ function CreateListing({
             paymentPhone: String(form.get("paymentPhone")),
             paymentRecipientName: String(form.get("paymentRecipientName")),
             paymentSbpLink: String(form.get("paymentSbpLink") || ""),
+            offerSellerName: String(form.get("offerSellerName")),
+            offerInn: String(form.get("offerInn")),
+            offerEmail: String(form.get("offerEmail")),
+            offerAddress: String(form.get("offerAddress")),
+            offerSettlementAccount: String(form.get("offerSettlementAccount")),
+            offerBankName: String(form.get("offerBankName")),
+            offerBik: String(form.get("offerBik")),
+            offerCorrespondentAccount: String(form.get("offerCorrespondentAccount")),
+            offerAccepted: form.get("offerAccepted") === "on",
           }),
         });
       }
@@ -4767,6 +4988,12 @@ function CreateListing({
               Все новые объявления автоматически публикуются в этом магазине.
               Название, реквизиты и фото магазина изменяются в профиле.
             </p>
+            {!store.offerComplete && (
+              <p className="legal-warning">
+                Публикация приостановлена: заполните реквизиты публичной оферты
+                в профиле магазина.
+              </p>
+            )}
           </div>
         ) : (
           <div className="store-setup-fields">
@@ -4848,6 +5075,34 @@ function CreateListing({
                 Необязательно. Можно вставить любую ссылку банка или
                 платёжного сервиса, начинающуюся с https://.
               </small>
+            </label>
+            <div className="legal-form-heading">
+              <span>ПУБЛИЧНАЯ ОФЕРТА</span>
+              <b>Реквизиты продавца</b>
+              <p>Данные автоматически подставляются в раздел 10 документа.</p>
+            </div>
+            <label><span>Продавец: ФИО / название ИП</span><input name="offerSellerName" maxLength={200} required /></label>
+            <label><span>ИНН</span><input name="offerInn" inputMode="numeric" pattern="[0-9]{10}|[0-9]{12}" maxLength={12} required /></label>
+            <label><span>Email продавца</span><input name="offerEmail" type="email" maxLength={254} required /></label>
+            <label><span>Адрес продавца</span><textarea name="offerAddress" rows={3} maxLength={500} required /></label>
+            <label><span>Расчётный счёт</span><input name="offerSettlementAccount" inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
+            <label><span>Наименование банка</span><input name="offerBankName" maxLength={200} required /></label>
+            <label><span>БИК</span><input name="offerBik" inputMode="numeric" pattern="[0-9]{9}" maxLength={9} required /></label>
+            <label><span>Корреспондентский счёт</span><input name="offerCorrespondentAccount" inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
+            <label className="checkbox-label legal-consent">
+              <input name="offerAccepted" type="checkbox" required />
+              <span>
+                Согласен с условиями{" "}
+                <button
+                  className="inline-document-link"
+                  type="button"
+                  onClick={() => void onDownloadOfferTemplate().catch((downloadError) =>
+                    setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
+                  )}
+                >
+                  публичной оферты
+                </button>
+              </span>
             </label>
           </div>
         )}
@@ -5069,7 +5324,7 @@ function CreateListing({
         )}
         <label className="checkbox-label"><input type="checkbox" required /><span>Подтверждаю достоверность объявления</span></label>
         {error && <p className="form-error">{error}</p>}
-        <button className="main-action" type="submit" disabled={saving || storeLoading}>{saving ? savingLabel || "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
+        <button className="main-action" type="submit" disabled={saving || storeLoading || !!store && !store.offerComplete}>{saving ? savingLabel || "Публикуем…" : "Опубликовать объявление"}<ChevronRight size={17} /></button>
       </form>
     </section>
   );
