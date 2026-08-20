@@ -2632,7 +2632,7 @@ function ProductModal({
           )}
           {product.kind === "regular" && (
             <p className="product-offer-consent">
-              Нажимая кнопку «Добавить в корзину», вы соглашаетесь с{" "}
+              Добавляя товар в корзину, вы соглашаетесь с{" "}
               <button type="button" onClick={onDownloadOffer}>
                 публичной офертой продавца
               </button>.
