@@ -256,6 +256,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .quantity-picker button { width: 38px; height: 38px; border: 1px solid rgba(227,27,35,.35); border-radius: 10px; background: rgba(227,27,35,.14); color: var(--red-2); display: grid; place-items: center; cursor: pointer; }
 .quantity-picker button:disabled { opacity: .35; cursor: default; }
 .quantity-picker b { min-width: 20px; text-align: center; font-size: 15px; }
+.product-offer-consent { margin: 2px 0 10px; color: #777; font-size: 9px; line-height: 1.55; }
+.product-offer-consent button { display: inline; padding: 0; border: 0; background: transparent; color: var(--red-2); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .product-buy-action { position: sticky; z-index: 4; bottom: 0; margin-top: 8px; box-shadow: 0 -12px 30px #101010, 0 10px 30px rgba(227,27,35,.18); }
 .modal-subtitle { color: #777; font-size: 11px; margin: 0 0 14px; }
 .modal-tags { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -431,8 +433,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .checkbox-label input { width: 16px; accent-color: var(--red); }
 .checkbox-label span { text-transform: none !important; letter-spacing: 0 !important; }
 .inline-document-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--red-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; font: inherit; }
-.legal-consent { align-items: flex-start !important; gap: 10px; padding: 13px; border: 1px solid rgba(227,27,35,.25); background: rgba(227,27,35,.04); }
-.legal-consent input { flex: 0 0 auto; margin-top: 2px; }
 .legal-form-heading { margin-top: 8px; padding-top: 16px; border-top: 1px solid rgba(227,27,35,.28); }
 .legal-warning { color: #ff7f85 !important; }
 .color-mode-checkbox { padding: 14px; border: 1px solid var(--line); background: #151515; align-items: flex-start; }
@@ -1297,8 +1297,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .legal-profile-section.complete { border-left-color: var(--green); background: rgba(87,199,139,.055); }
 .legal-profile-section > b { font-size: 11px; text-transform: uppercase; }
 .legal-profile-section > small { color: #777; font-size: 8px; line-height: 1.5; }
-.seller-profile-form .legal-consent { flex-direction: row !important; }
-.document-download-action { width: 100%; justify-content: center; }
 .profile-store-image { min-height: 210px; position: relative; display: block; overflow: hidden; border: 1px solid var(--line); background: #151515; cursor: pointer; }
 .profile-store-image > img { display: block; width: 100%; height: 230px; object-fit: cover; object-position: center; }
 .profile-store-image > div { min-height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #777; font-size: 9px; }

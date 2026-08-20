@@ -301,7 +301,7 @@ public class MarketplaceService {
                 input.offerSellerName(), input.offerInn(), input.offerEmail(),
                 input.offerAddress(), input.offerSettlementAccount(),
                 input.offerBankName(), input.offerBik(),
-                input.offerCorrespondentAccount(), input.offerAccepted()
+                input.offerCorrespondentAccount()
         );
         PaymentMethod payment = normalizePaymentMethod(
                 input.paymentBank(),
@@ -316,8 +316,8 @@ public class MarketplaceService {
                    payment_recipient_name, payment_sbp_link, payment_details,
                    offer_seller_name, offer_inn, offer_email, offer_address,
                    offer_settlement_account, offer_bank_name, offer_bik,
-                   offer_correspondent_account, offer_accepted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   offer_correspondent_account)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (group_id, seller_telegram_id) DO UPDATE SET
                   name = EXCLUDED.name,
                   description = EXCLUDED.description,
@@ -335,7 +335,6 @@ public class MarketplaceService {
                   offer_bank_name = EXCLUDED.offer_bank_name,
                   offer_bik = EXCLUDED.offer_bik,
                   offer_correspondent_account = EXCLUDED.offer_correspondent_account,
-                  offer_accepted_at = CURRENT_TIMESTAMP,
                   active = 1
                 RETURNING id
                 """, Long.class, input.groupId(), sellerTelegramId, input.name(),
@@ -356,8 +355,7 @@ public class MarketplaceService {
                        st.offer_address, st.offer_settlement_account,
                        st.offer_bank_name, st.offer_bik,
                        st.offer_correspondent_account,
-                       CASE WHEN st.offer_accepted_at IS NOT NULL
-                         AND COALESCE(st.offer_seller_name, '') <> ''
+                       CASE WHEN COALESCE(st.offer_seller_name, '') <> ''
                          AND COALESCE(st.offer_inn, '') <> ''
                          AND COALESCE(st.offer_email, '') <> ''
                          AND COALESCE(st.offer_address, '') <> ''
@@ -391,8 +389,7 @@ public class MarketplaceService {
                        st.offer_address, st.offer_settlement_account,
                        st.offer_bank_name, st.offer_bik,
                        st.offer_correspondent_account,
-                       CASE WHEN st.offer_accepted_at IS NOT NULL
-                         AND COALESCE(st.offer_seller_name, '') <> ''
+                       CASE WHEN COALESCE(st.offer_seller_name, '') <> ''
                          AND COALESCE(st.offer_inn, '') <> ''
                          AND COALESCE(st.offer_email, '') <> ''
                          AND COALESCE(st.offer_address, '') <> ''
@@ -459,8 +456,7 @@ public class MarketplaceService {
                                    String offerEmail, String offerAddress,
                                    String offerSettlementAccount,
                                    String offerBankName, String offerBik,
-                                   String offerCorrespondentAccount,
-                                   boolean offerAccepted) {
+                                   String offerCorrespondentAccount) {
         String normalizedName = name == null ? "" : name.strip();
         String normalizedImageUrl = imageUrl == null ? "" : imageUrl.strip();
         PaymentMethod payment = normalizePaymentMethod(
@@ -469,7 +465,7 @@ public class MarketplaceService {
         OfferDetails offer = normalizeOfferDetails(
                 offerSellerName, offerInn, offerEmail, offerAddress,
                 offerSettlementAccount, offerBankName, offerBik,
-                offerCorrespondentAccount, offerAccepted
+                offerCorrespondentAccount
         );
         if (normalizedName.isEmpty() || normalizedName.length() > 100) {
             throw new IllegalArgumentException(
@@ -487,8 +483,7 @@ public class MarketplaceService {
                     payment_details = ?, offer_seller_name = ?, offer_inn = ?,
                     offer_email = ?, offer_address = ?,
                     offer_settlement_account = ?, offer_bank_name = ?,
-                    offer_bik = ?, offer_correspondent_account = ?,
-                    offer_accepted_at = CURRENT_TIMESTAMP
+                    offer_bik = ?, offer_correspondent_account = ?
                 WHERE id = ? AND seller_telegram_id = ? AND active = 1
                 """, normalizedName, normalizedImageUrl, payment.bank(),
                 payment.phone(), payment.recipientName(), payment.sbpLink(),
@@ -508,7 +503,7 @@ public class MarketplaceService {
                        st.offer_inn, st.offer_email, st.offer_address,
                        st.offer_settlement_account, st.offer_bank_name,
                        st.offer_bik, st.offer_correspondent_account,
-                       st.offer_accepted_at, u.username, u.phone
+                       u.username, u.phone
                 FROM stores st
                 JOIN users u ON u.telegram_id = st.seller_telegram_id
                 WHERE st.id = ? AND st.active = 1
@@ -521,7 +516,7 @@ public class MarketplaceService {
         Map<String, Object> details = jdbc.queryForMap("""
                 SELECT offer_seller_name, offer_inn, offer_email, offer_address,
                        offer_settlement_account, offer_bank_name, offer_bik,
-                       offer_correspondent_account, offer_accepted_at
+                       offer_correspondent_account
                 FROM stores WHERE id = ? AND active = 1
                 """, storeId);
         assertOfferDetailsComplete(details);
@@ -531,7 +526,7 @@ public class MarketplaceService {
         for (String field : List.of(
                 "offer_seller_name", "offer_inn", "offer_email", "offer_address",
                 "offer_settlement_account", "offer_bank_name", "offer_bik",
-                "offer_correspondent_account", "offer_accepted_at")) {
+                "offer_correspondent_account")) {
             Object value = details.get(field);
             if (value == null || String.valueOf(value).isBlank()) {
                 throw new IllegalArgumentException(
@@ -544,10 +539,7 @@ public class MarketplaceService {
     private OfferDetails normalizeOfferDetails(
             String sellerName, String inn, String email, String address,
             String settlementAccount, String bankName, String bik,
-            String correspondentAccount, boolean accepted) {
-        if (!accepted) {
-            throw new IllegalArgumentException("Подтвердите согласие с публичной офертой");
-        }
+            String correspondentAccount) {
         String normalizedName = requiredText(sellerName, "Укажите продавца", 200);
         String normalizedInn = digits(inn);
         if (!(normalizedInn.length() == 10 || normalizedInn.length() == 12)) {
@@ -3382,8 +3374,7 @@ public class MarketplaceService {
                            String paymentSbpLink, String offerSellerName,
                            String offerInn, String offerEmail, String offerAddress,
                            String offerSettlementAccount, String offerBankName,
-                           String offerBik, String offerCorrespondentAccount,
-                           boolean offerAccepted) {}
+                           String offerBik, String offerCorrespondentAccount) {}
     public record ReservationResult(int reserved, int target, boolean thresholdReached) {}
     public record OrderItem(long productId, int quantity, String selectedColorKey) {}
     public record ClubTopic(long telegramGroupId, int threadId) {}

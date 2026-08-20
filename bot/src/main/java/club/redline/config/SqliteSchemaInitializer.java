@@ -99,7 +99,6 @@ public class SqliteSchemaInitializer implements ApplicationRunner {
         addTextColumn(jdbc, columns, "stores", "offer_bank_name");
         addTextColumn(jdbc, columns, "stores", "offer_bik");
         addTextColumn(jdbc, columns, "stores", "offer_correspondent_account");
-        addTextColumn(jdbc, columns, "stores", "offer_accepted_at");
         jdbc.update("""
                 UPDATE stores
                 SET payment_details = COALESCE(

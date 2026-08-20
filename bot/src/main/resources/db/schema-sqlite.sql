@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS stores (
   offer_bank_name TEXT,
   offer_bik TEXT,
   offer_correspondent_account TEXT,
-  offer_accepted_at TEXT,
   rating REAL NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   UNIQUE (group_id, seller_telegram_id)

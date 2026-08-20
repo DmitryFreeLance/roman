@@ -100,7 +100,7 @@ class MarketplaceServiceSqliteTest {
                 "ИП Иванов Иван Иванович", "770000000000",
                 "seller@example.test", "г. Москва, ул. Тестовая, д. 1",
                 "40802810000000000001", "Тестовый банк", "044525000",
-                "30101810000000000001", true
+                "30101810000000000001"
         ));
         long productId = marketplace.createProduct(sellerId, new MarketplaceService.NewProduct(
                 groupId, "Brake kit", "Track brake kit", "Комплект на одну ось", "Brakes",
@@ -139,7 +139,7 @@ class MarketplaceServiceSqliteTest {
                 "ИП Петров Пётр Петрович", "770000000001",
                 "petrov@example.test", "г. Москва, ул. Новая, д. 2",
                 "40802810000000000002", "Т-Банк", "044525974",
-                "30101810145250000974", true
+                "30101810145250000974"
         );
         assertThat(marketplace.myStore(sellerId, -100123L).get("image_url"))
                 .isEqualTo("https://example.test/store-profile.jpg");

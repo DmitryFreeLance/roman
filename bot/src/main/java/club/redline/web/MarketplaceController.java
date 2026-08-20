@@ -232,8 +232,7 @@ public class MarketplaceController {
                 request.paymentSbpLink(), request.offerSellerName(),
                 request.offerInn(), request.offerEmail(), request.offerAddress(),
                 request.offerSettlementAccount(), request.offerBankName(),
-                request.offerBik(), request.offerCorrespondentAccount(),
-                request.offerAccepted()
+                request.offerBik(), request.offerCorrespondentAccount()
         ));
         return Map.of("id", id);
     }
@@ -262,8 +261,7 @@ public class MarketplaceController {
                 request.paymentSbpLink(), request.offerSellerName(),
                 request.offerInn(), request.offerEmail(), request.offerAddress(),
                 request.offerSettlementAccount(), request.offerBankName(),
-                request.offerBik(), request.offerCorrespondentAccount(),
-                request.offerAccepted()
+                request.offerBik(), request.offerCorrespondentAccount()
         );
     }
 
@@ -788,8 +786,7 @@ public class MarketplaceController {
             @NotBlank @Pattern(regexp = "\\d{20}") String offerSettlementAccount,
             @NotBlank @Size(max = 200) String offerBankName,
             @NotBlank @Pattern(regexp = "\\d{9}") String offerBik,
-            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount,
-            boolean offerAccepted
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount
     ) {}
     public record StoreImageRequest(@NotBlank String imageUrl) {}
     public record StoreProfileRequest(
@@ -807,8 +804,7 @@ public class MarketplaceController {
             @NotBlank @Pattern(regexp = "\\d{20}") String offerSettlementAccount,
             @NotBlank @Size(max = 200) String offerBankName,
             @NotBlank @Pattern(regexp = "\\d{9}") String offerBik,
-            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount,
-            boolean offerAccepted
+            @NotBlank @Pattern(regexp = "\\d{20}") String offerCorrespondentAccount
     ) {}
     public record UpdateProductRequest(
             @NotBlank String title,

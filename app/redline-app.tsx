@@ -1876,12 +1876,6 @@ export function RedlineApp() {
             club={selectedClub}
             categories={categories}
             request={request}
-            onDownloadOfferTemplate={() =>
-              downloadDocument(
-                "/legal/public-offer-template",
-                "Публичная_оферта_шаблон.docx",
-              )
-            }
             onCreate={() => navigate("create")}
             onChanged={async () => {
               await Promise.all([
@@ -1975,18 +1969,6 @@ export function RedlineApp() {
           profile={profile}
           club={selectedClub}
           request={request}
-          onDownloadOfferTemplate={() =>
-            downloadDocument(
-              "/legal/public-offer-template",
-              "Публичная_оферта_шаблон.docx",
-            )
-          }
-          onDownloadOffer={(storeId) =>
-            downloadDocument(
-              `/stores/${storeId}/offer`,
-              "Публичная_оферта_магазина.docx",
-            )
-          }
           onClose={() => setProfileOpen(false)}
           onChanged={async () => {
             if (selectedClub) {
@@ -2648,13 +2630,14 @@ function ProductModal({
               </div>
             </div>
           )}
-          <button
-            className="outline-action product-offer-action"
-            type="button"
-            onClick={onDownloadOffer}
-          >
-            <ExternalLink size={15} /> Скачать публичную оферту продавца
-          </button>
+          {product.kind === "regular" && (
+            <p className="product-offer-consent">
+              Нажимая кнопку «Добавить в корзину», вы соглашаетесь с{" "}
+              <button type="button" onClick={onDownloadOffer}>
+                публичной офертой продавца
+              </button>.
+            </p>
+          )}
           <button
             className="main-action product-buy-action"
             disabled={
@@ -3063,16 +3046,12 @@ function SellerProfileModal({
   profile,
   club,
   request,
-  onDownloadOfferTemplate,
-  onDownloadOffer,
   onClose,
   onChanged,
 }: {
   profile: Profile;
   club: Club | null;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onDownloadOfferTemplate: () => Promise<void>;
-  onDownloadOffer: (storeId: number) => Promise<void>;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
@@ -3091,7 +3070,6 @@ function SellerProfileModal({
   const [offerBankName, setOfferBankName] = useState("");
   const [offerBik, setOfferBik] = useState("");
   const [offerCorrespondentAccount, setOfferCorrespondentAccount] = useState("");
-  const [offerAccepted, setOfferAccepted] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [loading, setLoading] = useState(!!club);
@@ -3124,7 +3102,6 @@ function SellerProfileModal({
       setOfferBankName(next.offerBankName || "");
       setOfferBik(next.offerBik || "");
       setOfferCorrespondentAccount(next.offerCorrespondentAccount || "");
-      setOfferAccepted(next.offerComplete);
       setError("");
     } catch (loadError) {
       setError(
@@ -3160,7 +3137,6 @@ function SellerProfileModal({
         setOfferBankName(next.offerBankName || "");
         setOfferBik(next.offerBik || "");
         setOfferCorrespondentAccount(next.offerCorrespondentAccount || "");
-        setOfferAccepted(next.offerComplete);
         setError("");
       })
       .catch((loadError) => {
@@ -3222,7 +3198,6 @@ function SellerProfileModal({
           offerBankName,
           offerBik,
           offerCorrespondentAccount,
-          offerAccepted,
         }),
       });
       setFile(null);
@@ -3396,32 +3371,6 @@ function SellerProfileModal({
               <label><span>Наименование банка</span><input value={offerBankName} onChange={(event) => setOfferBankName(event.target.value)} maxLength={200} required /></label>
               <label><span>БИК</span><input value={offerBik} onChange={(event) => setOfferBik(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{9}" maxLength={9} required /></label>
               <label><span>Корреспондентский счёт</span><input value={offerCorrespondentAccount} onChange={(event) => setOfferCorrespondentAccount(event.target.value.replace(/\D/g, ""))} inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
-              <label className="checkbox-label legal-consent">
-                <input type="checkbox" checked={offerAccepted} onChange={(event) => setOfferAccepted(event.target.checked)} required />
-                <span>
-                  Согласен с условиями{" "}
-                  <button
-                    className="inline-document-link"
-                    type="button"
-                    onClick={() => void onDownloadOfferTemplate().catch((downloadError) =>
-                      setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
-                    )}
-                  >
-                    публичной оферты
-                  </button>
-                </span>
-              </label>
-              {sellerProfile.offerComplete && sellerProfile.storeId && (
-                <button
-                  className="outline-action document-download-action"
-                  type="button"
-                  onClick={() => void onDownloadOffer(sellerProfile.storeId as number).catch((downloadError) =>
-                    setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
-                  )}
-                >
-                  <ExternalLink size={15} /> Скачать персональную оферту
-                </button>
-              )}
               {error && <p className="form-error">{error}</p>}
               <button
                 className="main-action"
@@ -3429,8 +3378,7 @@ function SellerProfileModal({
                   saving ||
                   !storeName.trim() ||
                   !paymentPhone.trim() ||
-                  !paymentRecipientName.trim() ||
-                  !offerAccepted
+                  !paymentRecipientName.trim()
                 }
               >
                 {saving ? "Сохраняем…" : "Сохранить профиль магазина"}
@@ -4737,7 +4685,6 @@ function CreateListing({
   club,
   categories,
   request,
-  onDownloadOfferTemplate,
   onCreated,
 }: {
   profile: Profile;
@@ -4745,7 +4692,6 @@ function CreateListing({
   club: Club | null;
   categories: Category[];
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onDownloadOfferTemplate: () => Promise<void>;
   onCreated: () => Promise<void>;
 }) {
   const [kind, setKind] = useState<"regular" | "group">("regular");
@@ -4920,7 +4866,6 @@ function CreateListing({
             offerBankName: String(form.get("offerBankName")),
             offerBik: String(form.get("offerBik")),
             offerCorrespondentAccount: String(form.get("offerCorrespondentAccount")),
-            offerAccepted: form.get("offerAccepted") === "on",
           }),
         });
       }
@@ -5089,21 +5034,6 @@ function CreateListing({
             <label><span>Наименование банка</span><input name="offerBankName" maxLength={200} required /></label>
             <label><span>БИК</span><input name="offerBik" inputMode="numeric" pattern="[0-9]{9}" maxLength={9} required /></label>
             <label><span>Корреспондентский счёт</span><input name="offerCorrespondentAccount" inputMode="numeric" pattern="[0-9]{20}" maxLength={20} required /></label>
-            <label className="checkbox-label legal-consent">
-              <input name="offerAccepted" type="checkbox" required />
-              <span>
-                Согласен с условиями{" "}
-                <button
-                  className="inline-document-link"
-                  type="button"
-                  onClick={() => void onDownloadOfferTemplate().catch((downloadError) =>
-                    setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
-                  )}
-                >
-                  публичной оферты
-                </button>
-              </span>
-            </label>
           </div>
         )}
         <label className="checkbox-label color-mode-checkbox">
