@@ -1,5 +1,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 
 const appRoot = process.env.REDLINE_APP_ROOT || "/app";
@@ -10,6 +12,7 @@ const miniAppPort = parsePort(
   3000,
   "MINI_APP_INTERNAL_PORT",
 );
+const clientAssetsRoot = path.join(appRoot, "dist/client/assets");
 
 if (new Set([publicPort, botPort, miniAppPort]).size !== 3) {
   throw new Error("Public, bot and Mini App ports must be different");
@@ -39,6 +42,11 @@ const miniApp = launch(
 
 const proxy = http.createServer((request, response) => {
   const originalUrl = request.url || "/";
+  const staticAsset = resolveStaticAsset(originalUrl);
+  if (staticAsset) {
+    void serveStaticAsset(request, response, staticAsset);
+    return;
+  }
   const isMiniApp =
     originalUrl === "/redlineclub" || originalUrl.startsWith("/redlineclub/");
   const isPrefixedApi =
@@ -196,4 +204,58 @@ function parsePort(value, fallback, name) {
     throw new Error(`${name} must be an integer between 1 and 65535`);
   }
   return parsed;
+}
+
+function resolveStaticAsset(originalUrl) {
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(originalUrl, "http://localhost").pathname);
+  } catch {
+    return null;
+  }
+  const prefix = "/redlineclub/assets/";
+  if (!pathname.startsWith(prefix)) return null;
+  const relativePath = pathname.slice(prefix.length);
+  const resolvedPath = path.resolve(clientAssetsRoot, relativePath);
+  if (!relativePath || !resolvedPath.startsWith(`${clientAssetsRoot}${path.sep}`)) {
+    return null;
+  }
+  return resolvedPath;
+}
+
+async function serveStaticAsset(request, response, filePath) {
+  try {
+    const file = await stat(filePath);
+    if (!file.isFile()) throw new Error("Not a file");
+    response.writeHead(200, {
+      "content-type": assetContentType(filePath),
+      "content-length": file.size,
+      "cache-control": "public, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+    });
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    const stream = createReadStream(filePath);
+    stream.on("error", () => response.destroy());
+    stream.pipe(response);
+  } catch {
+    response.writeHead(404, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    response.end("Asset not found\n");
+  }
+}
+
+function assetContentType(filePath) {
+  switch (path.extname(filePath)) {
+    case ".js": return "application/javascript; charset=utf-8";
+    case ".css": return "text/css; charset=utf-8";
+    case ".woff2": return "font/woff2";
+    case ".svg": return "image/svg+xml";
+    case ".webp": return "image/webp";
+    default: return "application/octet-stream";
+  }
 }

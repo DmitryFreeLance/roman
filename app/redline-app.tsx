@@ -328,7 +328,12 @@ type TelegramWebApp = {
   hideKeyboard?: () => void;
   openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   openTelegramLink?: (url: string) => void;
-  BackButton?: { hide: () => void };
+  BackButton?: {
+    hide: () => void;
+    show?: () => void;
+    onClick?: (callback: () => void) => void;
+    offClick?: (callback: () => void) => void;
+  };
   SettingsButton?: { hide: () => void };
   HapticFeedback?: {
     impactOccurred: (style: "light" | "medium" | "heavy") => void;
@@ -912,6 +917,8 @@ export function RedlineApp() {
       : "market";
   });
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [offerProduct, setOfferProduct] = useState<Product | null>(null);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const [discussionProduct, setDiscussionProduct] = useState<Product | null>(null);
   const [activeCategory, setActiveCategory] = useState("Все");
   const [activeStoreId, setActiveStoreId] = useState<number | null>(null);
@@ -1095,30 +1102,6 @@ export function RedlineApp() {
       window.clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortFromCaller);
     }
-  }
-
-  async function downloadDocument(path: string, filename: string) {
-    const response = await fetch(`${API}${path}`, {
-      headers: { "X-Telegram-Init-Data": initData },
-    });
-    if (!response.ok) {
-      let message = `Ошибка ${response.status}`;
-      try {
-        const body = await response.json();
-        message = body.message || body.error || message;
-      } catch {
-        // Keep the HTTP status when the server did not return JSON.
-      }
-      throw new Error(message);
-    }
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   async function loadBootstrap(data = initData) {
@@ -1587,28 +1570,35 @@ export function RedlineApp() {
 
   if (profile && !profile.registered) {
     return (
-      <Registration
-        profile={profile}
-        clubs={clubs}
-        onDownloadPolicy={() =>
-          downloadDocument(
-            "/legal/privacy-policy",
-            "Политика_конфиденциальности.docx",
-          )
-        }
-        onRegister={async (name, phone, groupId, privacyAccepted) => {
-          await request("/register", {
-            method: "POST",
-            body: JSON.stringify({
-              displayName: name,
-              phone,
-              groupId,
-              privacyAccepted,
-            }),
-          });
-          await loadBootstrap();
-        }}
-      />
+      <>
+        <Registration
+          profile={profile}
+          clubs={clubs}
+          onDownloadPolicy={() => setPrivacyOpen(true)}
+          onRegister={async (name, phone, groupId, privacyAccepted) => {
+            await request("/register", {
+              method: "POST",
+              body: JSON.stringify({
+                displayName: name,
+                phone,
+                groupId,
+                privacyAccepted,
+              }),
+            });
+            await loadBootstrap();
+          }}
+        />
+        {privacyOpen && (
+          <LegalDocumentViewer
+            path="/legal/privacy-policy-view"
+            documentTitle="Политика конфиденциальности"
+            label="Документ платформы"
+            fallbackTitle="REDLINE CLUB"
+            request={request}
+            onClose={() => setPrivacyOpen(false)}
+          />
+        )}
+      </>
     );
   }
 
@@ -1996,14 +1986,18 @@ export function RedlineApp() {
           onAddToCart={(quantity, selectedColorKey) =>
             addToCart(selectedProduct, quantity, selectedColorKey)
           }
-          onDownloadOffer={() =>
-            downloadDocument(
-              `/stores/${selectedProduct.storeId}/offer`,
-              `Публичная_оферта_${selectedProduct.storeName}.docx`,
-            ).catch((downloadError) =>
-              setToast(downloadError instanceof Error ? downloadError.message : "Не удалось скачать оферту"),
-            )
-          }
+          onOpenOffer={() => setOfferProduct(selectedProduct)}
+        />
+      )}
+
+      {offerProduct && (
+        <LegalDocumentViewer
+          path={`/stores/${offerProduct.storeId}/offer-view`}
+          documentTitle="Публичная оферта"
+          label="Документ продавца"
+          fallbackTitle={offerProduct.storeName}
+          request={request}
+          onClose={() => setOfferProduct(null)}
         />
       )}
 
@@ -2035,7 +2029,7 @@ function Registration({
     groupId: number | null,
     privacyAccepted: boolean,
   ) => Promise<void>;
-  onDownloadPolicy: () => Promise<void>;
+  onDownloadPolicy: () => void;
 }) {
   const suggestedName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const [name, setName] = useState(suggestedName);
@@ -2129,9 +2123,7 @@ function Registration({
               <button
                 className="inline-document-link"
                 type="button"
-                onClick={() => void onDownloadPolicy().catch((downloadError) =>
-                  setError(downloadError instanceof Error ? downloadError.message : "Не удалось скачать документ"),
-                )}
+                onClick={onDownloadPolicy}
               >
                 политики конфиденциальности
               </button>
@@ -2477,7 +2469,7 @@ function ProductModal({
   onDiscuss,
   onReserve,
   onAddToCart,
-  onDownloadOffer,
+  onOpenOffer,
 }: {
   product: Product;
   favorite: boolean;
@@ -2486,7 +2478,7 @@ function ProductModal({
   onDiscuss: () => void;
   onReserve: (selectedColorKey?: string) => void;
   onAddToCart: (quantity: number, selectedColorKey?: string) => void;
-  onDownloadOffer: () => void;
+  onOpenOffer: () => void;
 }) {
   const [activeImage, setActiveImage] = useState(0);
   const [activeColorKey, setActiveColorKey] = useState(
@@ -2633,7 +2625,7 @@ function ProductModal({
           {product.kind === "regular" && (
             <p className="product-offer-consent">
               Добавляя товар в корзину, вы соглашаетесь с{" "}
-              <button type="button" onClick={onDownloadOffer}>
+              <button type="button" onClick={onOpenOffer}>
                 публичной офертой продавца
               </button>.
             </p>
@@ -2660,6 +2652,85 @@ function ProductModal({
           </button>
         </div>
       </article>
+    </div>
+  );
+}
+
+function LegalDocumentViewer({
+  path,
+  documentTitle,
+  label,
+  fallbackTitle,
+  request,
+  onClose,
+}: {
+  path: string;
+  documentTitle: string;
+  label: string;
+  fallbackTitle: string;
+  request: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(fallbackTitle);
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void request<{ title: string; content: string }>(path)
+      .then((document) => {
+        if (!cancelled) {
+          setTitle(document.title || fallbackTitle);
+          setContent(document.content);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Не удалось открыть документ",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackTitle, path, request]);
+
+  useEffect(() => {
+    const backButton = window.Telegram?.WebApp?.BackButton;
+    backButton?.show?.();
+    backButton?.onClick?.(onClose);
+    return () => {
+      backButton?.offClick?.(onClose);
+      backButton?.hide();
+    };
+  }, [onClose]);
+
+  return (
+    <div className="offer-viewer" role="dialog" aria-modal="true" aria-label={documentTitle}>
+      <header className="offer-viewer-header">
+        <button type="button" onClick={onClose} aria-label="Назад к товару">
+          <ArrowLeft size={20} /> Назад
+        </button>
+        <div>
+          <span>{label}</span>
+          <strong>{documentTitle}</strong>
+        </div>
+      </header>
+      <section className="offer-viewer-body">
+        <div className="offer-viewer-paper">
+          <p className="offer-viewer-store">{title}</p>
+          {loading && <p className="offer-viewer-status">Загружаем документ…</p>}
+          {error && <p className="offer-viewer-error">{error}</p>}
+          {content && <div className="offer-viewer-content">{content}</div>}
+        </div>
+      </section>
     </div>
   );
 }

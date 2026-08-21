@@ -18,8 +18,11 @@ class LegalDocumentServiceTest {
         assertThat(privacyXml)
                 .doesNotContain("[Бот подставляет текущую дату")
                 .contains("Дата вступления в силу:");
+        assertThat(documents.privacyPolicyText())
+                .contains("Политика в отношении обработки персональных данных",
+                        "персональных данных");
 
-        String offerXml = documentXml(documents.personalizedOffer(Map.ofEntries(
+        Map<String, Object> offerDetails = Map.ofEntries(
                 Map.entry("seller_telegram_id", 101L),
                 Map.entry("username", "seller"),
                 Map.entry("phone", "+79990000000"),
@@ -32,11 +35,17 @@ class LegalDocumentServiceTest {
                 Map.entry("offer_bank_name", "Тестовый банк"),
                 Map.entry("offer_bik", "044525000"),
                 Map.entry("offer_correspondent_account", "30101810000000000001")
-        )));
+        );
+        String offerXml = documentXml(documents.personalizedOffer(offerDetails));
         assertThat(offerXml)
                 .doesNotContain("{{")
                 .contains("ИП Иванов Иван Иванович", "Garage", "@seller",
                         "40802810000000000001", "seller@example.test");
+
+        assertThat(documents.personalizedOfferText(offerDetails))
+                .contains("Публичная оферта", "ИП Иванов Иван Иванович", "Garage",
+                        "40802810000000000001", "seller@example.test")
+                .doesNotContain("{{");
     }
 
     private String documentXml(byte[] docx) throws Exception {

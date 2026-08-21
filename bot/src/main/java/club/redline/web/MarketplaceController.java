@@ -77,11 +77,17 @@ public class MarketplaceController {
     }
 
     @GetMapping("/legal/privacy-policy")
-    public ResponseEntity<byte[]> privacyPolicy(
-            @RequestHeader("X-Telegram-Init-Data") String initData) {
-        authenticated(initData);
+    public ResponseEntity<byte[]> privacyPolicy() {
         return document(legalDocuments.privacyPolicy(),
                 "Политика_конфиденциальности.docx");
+    }
+
+    @GetMapping("/legal/privacy-policy-view")
+    public Map<String, String> privacyPolicyView() {
+        return Map.of(
+                "title", "REDLINE CLUB",
+                "content", legalDocuments.privacyPolicyText()
+        );
     }
 
     @GetMapping("/legal/public-offer-template")
@@ -266,13 +272,19 @@ public class MarketplaceController {
     }
 
     @GetMapping("/stores/{storeId}/offer")
-    public ResponseEntity<byte[]> storeOffer(
-            @RequestHeader("X-Telegram-Init-Data") String initData,
-            @PathVariable long storeId) {
-        registered(initData);
+    public ResponseEntity<byte[]> storeOffer(@PathVariable long storeId) {
         Map<String, Object> details = marketplace.storeOfferDetails(storeId);
         return document(legalDocuments.personalizedOffer(details),
                 "Публичная_оферта_магазина.docx");
+    }
+
+    @GetMapping("/stores/{storeId}/offer-view")
+    public Map<String, String> storeOfferView(@PathVariable long storeId) {
+        Map<String, Object> details = marketplace.storeOfferDetails(storeId);
+        return Map.of(
+                "title", String.valueOf(details.getOrDefault("store_name", "Магазин")),
+                "content", legalDocuments.personalizedOfferText(details)
+        );
     }
 
     @PostMapping("/group-buys/{id}/reservations")
@@ -747,7 +759,9 @@ public class MarketplaceController {
                 .contentType(MediaType.parseMediaType(
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename*=UTF-8''" + encoded)
+                        "attachment; filename=\"redline-document.docx\"; filename*=UTF-8''" + encoded)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Content-Type-Options", "nosniff")
                 .body(content);
     }
 

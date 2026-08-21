@@ -258,6 +258,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .quantity-picker b { min-width: 20px; text-align: center; font-size: 15px; }
 .product-offer-consent { margin: 2px 0 10px; color: #777; font-size: 9px; line-height: 1.55; }
 .product-offer-consent button { display: inline; padding: 0; border: 0; background: transparent; color: var(--red-2); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.offer-viewer { position: fixed; z-index: 120; inset: 0; display: flex; flex-direction: column; min-height: 100dvh; background: #090909; color: #eee; }
+.offer-viewer-header { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; min-height: 72px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; border-bottom: 1px solid var(--line); background: #101010; }
+.offer-viewer-header > button { height: 42px; display: flex; align-items: center; gap: 7px; padding: 0 13px; border: 1px solid #343434; border-radius: 9px; background: #191919; color: #fff; font-size: 10px; font-weight: 850; cursor: pointer; }
+.offer-viewer-header > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.offer-viewer-header span { color: #777; font-size: 7px; letter-spacing: .14em; text-transform: uppercase; }
+.offer-viewer-header strong { font-family: var(--font-oswald); font-size: 19px; text-transform: uppercase; }
+.offer-viewer-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 14px 12px calc(22px + env(safe-area-inset-bottom)); }
+.offer-viewer-paper { width: min(760px, 100%); min-height: 100%; margin: 0 auto; padding: 24px clamp(18px, 5vw, 42px); border: 1px solid #2d2d2d; border-radius: 10px; background: #f4f1ea; color: #171717; box-shadow: 0 20px 70px rgba(0,0,0,.35); }
+.offer-viewer-store { margin: 0 0 18px; color: #8d171d; font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.offer-viewer-content { white-space: pre-wrap; overflow-wrap: anywhere; font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.62; }
+.offer-viewer-status, .offer-viewer-error { margin: 40px 0; text-align: center; font-size: 12px; }
+.offer-viewer-error { color: #a3131a; }
 .product-buy-action { position: sticky; z-index: 4; bottom: 0; margin-top: 8px; box-shadow: 0 -12px 30px #101010, 0 10px 30px rgba(227,27,35,.18); }
 .modal-subtitle { color: #777; font-size: 11px; margin: 0 0 14px; }
 .modal-tags { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilderFactory;
 
 @Service
 public class LegalDocumentService {
@@ -26,6 +28,10 @@ public class LegalDocumentService {
                 "[Бот подставляет текущую дату или дату публикации]",
                 LocalDate.now().format(RUSSIAN_DATE)
         ));
+    }
+
+    public String privacyPolicyText() {
+        return extractDocumentText(privacyPolicy());
     }
 
     public byte[] publicOfferTemplate() {
@@ -64,6 +70,53 @@ public class LegalDocumentService {
                 Map.entry("CORRESPONDENT_ACCOUNT", text(details.get("offer_correspondent_account"))),
                 Map.entry("ADDRESS", text(details.get("offer_address")))
         ));
+    }
+
+    public String personalizedOfferText(Map<String, Object> details) {
+        return extractDocumentText(personalizedOffer(details));
+    }
+
+    private String extractDocumentText(byte[] documentBytes) {
+        try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(documentBytes))) {
+            ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                if (!"word/document.xml".equals(entry.getName())) {
+                    continue;
+                }
+
+                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+                factory.setNamespaceAware(true);
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+                factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+                factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+                var document = factory.newDocumentBuilder().parse(input);
+                var paragraphs = document.getElementsByTagNameNS(
+                        "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "p"
+                );
+                StringBuilder result = new StringBuilder();
+                for (int index = 0; index < paragraphs.getLength(); index++) {
+                    var texts = ((org.w3c.dom.Element) paragraphs.item(index))
+                            .getElementsByTagNameNS(
+                                    "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "t"
+                            );
+                    StringBuilder paragraph = new StringBuilder();
+                    for (int textIndex = 0; textIndex < texts.getLength(); textIndex++) {
+                        paragraph.append(texts.item(textIndex).getTextContent());
+                    }
+                    String value = paragraph.toString().strip();
+                    if (!value.isBlank()) {
+                        if (!result.isEmpty()) result.append("\n\n");
+                        result.append(value);
+                    }
+                }
+                return result.toString();
+            }
+            throw new IllegalStateException("В публичной оферте отсутствует текст");
+        } catch (Exception error) {
+            throw new IllegalStateException("Не удалось подготовить публичную оферту для просмотра", error);
+        }
     }
 
     private byte[] renderOffer(Map<String, String> values) {
